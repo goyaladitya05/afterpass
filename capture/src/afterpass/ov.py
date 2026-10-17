@@ -69,15 +69,22 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
         raise SystemExit(f"OpenVINO device {device} not available (have {core.available_devices})")
     model = core.read_model(str(model_path))
     if shapes:
-        model.reshape(shapes)
-    if any(p.get_partial_shape().is_dynamic for p in model.inputs):
-        raise SystemExit("model has dynamic input dims, pass --shape name=d0,d1,...")
+        try:
+            model.reshape(shapes)
+        except RuntimeError as e:  # stateful LLMs keep dynamic KV cache dims; compile dynamic, feed static shapes
+            print(f"note: static reshape failed, compiling with dynamic shapes ({str(e).splitlines()[0]})")
+    specs = []
+    for p in model.inputs:
+        name = p.get_any_name()
+        if name not in shapes and p.get_partial_shape().is_dynamic:
+            raise SystemExit(f"input {name} has dynamic dims, pass --shape {name}=d0,d1,...")
+        specs.append((name, tuple(shapes.get(name) or p.get_shape()), p.get_element_type().to_dtype()))
 
     t0 = time.perf_counter()
     compiled = core.compile_model(model, device, {"PERF_COUNT": True, "PERFORMANCE_HINT": "LATENCY"})
     compile_s = time.perf_counter() - t0
 
-    feeds = random_inputs([(p.get_any_name(), tuple(p.get_shape()), p.get_element_type().to_dtype()) for p in model.inputs])
+    feeds = random_inputs(specs)
     req = compiled.create_infer_request()
     for _ in range(warmup):
         req.infer(feeds)
