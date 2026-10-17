@@ -80,3 +80,14 @@ fn bundles() {
         }
     }
 }
+
+#[test]
+fn synthetic_moe() {
+    let Some(p) = corpus("synthetic/moe-48x128.onnx") else { return };
+    let t0 = Instant::now();
+    let f = std::fs::File::open(p).unwrap();
+    let len = f.metadata().unwrap().len();
+    let g = onnx::parse(&mut FileSource(f, len)).unwrap();
+    let s = Session::from_model(Model { source: g, ..Default::default() });
+    report("synthetic/moe-48x128.onnx", t0, &s);
+}

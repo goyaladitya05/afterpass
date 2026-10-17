@@ -406,12 +406,58 @@ impl Pane {
         if !self.expanded.contains(&item) {
             return -1;
         }
-        let count = self.hier.stacks[s as usize].count as i32;
-        let k = self.unit.get(&s).copied().unwrap_or(0) as i32;
-        self.unit.insert(s, (k + delta).rem_euclid(count) as u32);
+        let st = self.hier.stacks[s as usize].clone();
+        let k = self.unit.get(&s).copied().unwrap_or(0);
+        let next = (k as i32 + delta).rem_euclid(st.count as i32) as u32;
+        let p = st.period as usize;
+        // carry expansion over: the same relative path in the new unit's instances
+        for j in 0..p {
+            let (from, to) = (st.instances[k as usize * p + j], st.instances[next as usize * p + j]);
+            let carried: Vec<Item> = self.expanded.iter().filter_map(|&it| self.carry(it, from, to)).collect();
+            self.expanded.extend(carried);
+        }
+        self.unit.insert(s, next);
         self.invalidate(frame);
         self.rebuild();
         self.find(item)
+    }
+
+    /// Labels from `root` (exclusive) down to group `g`, or None when `g` is not under `root`.
+    fn rel_path(&self, mut g: u32, root: u32) -> Option<Vec<&str>> {
+        let mut path = Vec::new();
+        while g != root {
+            if g == NONE || g == 0 {
+                return None;
+            }
+            path.push(self.hier.groups[g as usize].label.as_str());
+            g = self.hier.groups[g as usize].parent;
+        }
+        path.reverse();
+        Some(path)
+    }
+
+    fn resolve(&self, root: u32, path: &[&str]) -> Option<u32> {
+        path.iter().try_fold(root, |g, label| {
+            self.hier.groups[g as usize].children.iter().copied().find(|&c| self.hier.groups[c as usize].label == *label)
+        })
+    }
+
+    /// The item in instance `to` that corresponds to expanded item `it` in instance `from`.
+    fn carry(&self, it: Item, from: u32, to: u32) -> Option<Item> {
+        match it {
+            Item::Group(g) => {
+                let path = self.rel_path(g, from)?;
+                self.resolve(to, &path).map(Item::Group)
+            }
+            Item::Stack(s) => {
+                let stacks = &self.hier.stacks;
+                let c = stacks[s as usize].container;
+                let nc = self.resolve(to, &self.rel_path(c, from)?)?;
+                let i = (0..stacks.len() as u32).filter(|&t| stacks[t as usize].container == c).position(|t| t == s)?;
+                (0..stacks.len() as u32).filter(|&t| stacks[t as usize].container == nc).nth(i).map(Item::Stack)
+            }
+            _ => None,
+        }
     }
 
     /// Graph nodes shown by a box.

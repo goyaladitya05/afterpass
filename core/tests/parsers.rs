@@ -93,3 +93,21 @@ fn fused_kernels_land_in_their_majority_scope() {
     assert_eq!(majority_scope(scopes(&["/m/layers.5/Add", "/m/layers.6/Add"])), ["m", "layers"]);
     assert_eq!(majority_scope(scopes(&["/m/layers.5/a/X", "/m/layers.5/b/Y"])), ["m", "layers", "5"]);
 }
+
+#[test]
+fn stepping_a_stack_keeps_inner_expansion() {
+    use afterpass_core::ir::Model;
+    let g = onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap();
+    let mut s = Session::from_model(Model { source: g, ..Default::default() });
+    let titles = |s: &Session| s.pane(0).scene.titles.clone();
+    let stack = titles(&s).iter().position(|t| t.starts_with("layers.0..1")).unwrap() as u32;
+    let b = s.toggle(0, stack);
+    assert!(b >= 0);
+    let fc = titles(&s).iter().position(|t| t == "fc").unwrap() as u32;
+    assert!(s.toggle(0, fc) >= 0);
+    let frame = titles(&s).iter().position(|t| t.starts_with("layers.0..1")).unwrap() as u32;
+    assert!(s.step(0, frame, 1) >= 0);
+    let t = titles(&s);
+    assert!(t.iter().any(|t| t.contains("unit 2/2")));
+    assert!(t.iter().any(|t| t == "MatMul"), "fc group of the next unit should stay expanded: {t:?}");
+}
