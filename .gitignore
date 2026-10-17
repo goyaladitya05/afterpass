@@ -26,3 +26,4 @@ __pycache__/
 
 # small parser fixtures are committed
 !core/tests/fixtures/**
+!web/public/demo/**
