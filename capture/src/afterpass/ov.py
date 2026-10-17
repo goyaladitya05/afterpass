@@ -96,6 +96,8 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     # GPU sometimes names a profiling entry after the node's claim instead of the node; map it when unambiguous.
     by_claim: dict[str, list[int]] = {}
     for n in nodes:
+        if n["op"] in ("Input", "Output", "Parameter", "Result"):  # GPU Results repeat their producer's claims
+            continue
         for c in n["claims"]:
             by_claim.setdefault(c, []).append(n["id"])
     for name in list(per_node):

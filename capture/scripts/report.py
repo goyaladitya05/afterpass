@@ -23,6 +23,12 @@ def kernels(nodes: list, topology: bool) -> set:
     return {n["id"] for n in nodes if n["op"] not in IO and n["id"] not in const}
 
 
+def short(name: str) -> str:
+    for junk in ("(R)", "(TM)", "12th Gen ", "Intel ", "NVIDIA GeForce ", " Laptop GPU", " (16GB) (iGPU)"):
+        name = name.replace(junk, "")
+    return " ".join(name.split())
+
+
 def row(path: Path) -> list:
     b = bundle.read(path)
     kernels_ = kernels(b["compiled"]["nodes"], b["compiled"].get("topology", True))
@@ -36,7 +42,7 @@ def row(path: Path) -> list:
     src = [n for n in b["source"]["nodes"] if n["op"] != "Constant"]
     cap = b["capture"]
     return [
-        cap["model"], f"{cap['runtime']} {cap['device']}", len(b["source"]["nodes"]), len(b["compiled"]["nodes"]),
+        cap["model"], f"{cap['runtime']} {cap['device']}", short(b["compiled"]["device_name"]), len(b["source"]["nodes"]), len(b["compiled"]["nodes"]),
         len(kernels_), f"{share(0):.1f}%", f"{share(1):.1f}%", f"{share(2):.1f}%",
         f"{100.0 * sum(1 for n in src if n['id'] in linked) / max(len(src), 1):.1f}%",
         f"{b['profile']['latency']['median'] / 1000:.2f}", f"{cap['compile_s']:.1f}", f"{cap['capture_s']:.1f}",
@@ -44,7 +50,7 @@ def row(path: Path) -> list:
     ]
 
 
-HEADER = ["model", "runtime", "source nodes", "compiled nodes", "kernels", "explicit", "inferred", "unknown",
+HEADER = ["model", "runtime", "device name", "source nodes", "compiled nodes", "kernels", "explicit", "inferred", "unknown",
           "source covered", "latency ms", "compile s", "capture s", "bundle KiB"]
 
 if __name__ == "__main__":
