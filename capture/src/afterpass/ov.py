@@ -81,7 +81,8 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     props = {}
     for key in ("INFERENCE_PRECISION_HINT", "EXECUTION_MODE_HINT", "NUM_STREAMS", "INFERENCE_NUM_THREADS", "PERFORMANCE_HINT"):
         try:
-            props[key] = str(compiled.get_property(key))
+            value = compiled.get_property(key)
+            props[key] = value.get_type_name() if isinstance(value, ov.Type) else str(value)
         except Exception:
             pass
 
