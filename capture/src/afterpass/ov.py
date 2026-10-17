@@ -40,7 +40,7 @@ def _graph(rt_model, entries, linker):
             outputs.append(tid)
             pshape = out.get_partial_shape()
             tensors[tid] = {
-                "dtype": precisions[port] if port < len(precisions) else str(out.get_element_type()),
+                "dtype": precisions[port] if port < len(precisions) else out.get_element_type().get_type_name(),
                 "shape": [d.get_length() if d.is_static else None for d in pshape] if pshape.rank.is_static else None,
                 "layout": layouts[port] if port < len(layouts) else None,
                 "names": sorted(out.get_names()),

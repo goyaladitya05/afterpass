@@ -134,7 +134,10 @@ impl Hier {
                 scope_tokens(&node.name)
             }
         }).collect();
-        let fixed: Vec<bool> = (0..n).map(|i| !scope[i].is_empty() || IO_OPS.contains(&g.nodes[i].op.as_str())).collect();
+        // a compiled node whose claims have no majority scope stays at the root rather than inheriting a neighbour's
+        let fixed: Vec<bool> = (0..n)
+            .map(|i| !scope[i].is_empty() || IO_OPS.contains(&g.nodes[i].op.as_str()) || (compiled && !g.nodes[i].claims.is_empty()))
+            .collect();
         for pass in 0..2 {
             let order: Box<dyn Iterator<Item = usize>> = if pass == 0 { Box::new((0..n).rev()) } else { Box::new(0..n) };
             for v in order {
