@@ -5,7 +5,11 @@ import init, { Session } from "../pkg/afterpass_core.js";
 
 export type Request =
   | { id: number; op: "load"; files: File[]; flat?: boolean }
-  | { id: number; op: "toggle" | "step" | "select"; pane: number; box: number; delta?: number };
+  | { id: number; op: "toggle" | "step" | "select" | "inspect"; pane: number; box: number; delta?: number }
+  | { id: number; op: "overlay"; mode: string }
+  | { id: number; op: "findings" }
+  | { id: number; op: "search"; query: string }
+  | { id: number; op: "reveal"; pane: number; target: number; group: boolean };
 
 let session: Session | null = null;
 const wasm = init();
@@ -51,6 +55,17 @@ async function handle(req: Request): Promise<[unknown, Transferable[]]> {
     return [{ scenes, nodes, label: session.label(), latency: session.latency_us(), ms: performance.now() - t0, wasmBytes: memory.buffer.byteLength }, transfer];
   }
   if (!session) throw new Error("nothing loaded");
+  const ses = session;
+  const panes = Array.from({ length: ses.panes() }, (_, p) => p);
+  if (req.op === "overlay") return [panes.map((p) => ses.overlay(p, req.mode)), []];
+  if (req.op === "findings") return [JSON.parse(ses.findings()), []];
+  if (req.op === "search") return [panes.flatMap((p) => JSON.parse(ses.search(p, req.query, 40)).map((r: object) => ({ ...r, pane: p }))), []];
+  if (req.op === "inspect") return [JSON.parse(ses.inspect(req.pane, req.box)), []];
+  if (req.op === "reveal") {
+    const box = ses.reveal(req.pane, req.target, req.group);
+    const sc = scene(req.pane);
+    return [{ box, scene: sc.scene, wasmBytes: memory.buffer.byteLength }, sc.transfer];
+  }
   if (req.op === "select") {
     const linked = session.linked(req.pane, req.box) as { boxes?: Uint32Array; grades?: Uint8Array };
     return [{ boxes: linked.boxes ?? new Uint32Array(), grades: linked.grades ?? new Uint8Array(), text: session.describe(req.pane, req.box) }, []];

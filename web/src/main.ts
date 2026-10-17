@@ -1,18 +1,26 @@
+import { asciiTexture, loader, scramble, ticker } from "./chrome";
 import { buildAtlas } from "./glyphs";
 import { Kind, Renderer, type RGBA, type Scene, type Style, type Theme } from "./gl";
+import { type Finding, h, renderFindings, renderInspector, us } from "./panels";
 import type { Request } from "./worker";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
+const params = new URLSearchParams(location.search);
 const panesEl = $<HTMLElement>("#panes");
 const info = $<HTMLElement>("#info");
 const perf = $<HTMLElement>("#perf");
-const params = new URLSearchParams(location.search);
+const overlaySel = $<HTMLSelectElement>("#overlay");
+const landing = $<HTMLElement>("#landing");
 
+// theme
+const CATS = ["cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "cat-6", "cat-7", "cat-8"];
 const THEME_KEYS = [
   "bg", "bg-panel", "bg-canvas", "rule", "rule-soft", "text", "text-muted", "text-faint", "accent", "accent-text", "warn",
   "node-fill", "node-stroke", "node-text", "edge", "node-selected", "node-linked", "prov-inferred",
-  "time-0", "time-1", "time-2", "time-3", "time-4", "time-5",
+  "time-0", "time-1", "time-2", "time-3", "time-4", "time-5", ...CATS,
 ];
+/** Fixed precision colours so fp32 means the same colour in every graph (order of the core's legend). */
+const PRECISION_CATS = ["cat-1", "cat-2", "cat-6", "cat-3", "cat-4", "cat-7"];
 
 function readTheme(): Theme {
   const cs = getComputedStyle(document.documentElement), theme: Theme = {};
@@ -22,6 +30,7 @@ function readTheme(): Theme {
   }
   return theme;
 }
+const css = (c: RGBA) => `rgb(${c.slice(0, 3).map((x) => Math.round(x * 255)).join(" ")})`;
 
 // worker RPC
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -42,43 +51,87 @@ function rpc(req: NoId<Request>): Promise<any> {
   });
 }
 
-// panes
-const atlas = buildAtlas(getComputedStyle(document.documentElement).getPropertyValue("--font-mono") || "monospace");
-let theme = readTheme();
-const panes = [...document.querySelectorAll<HTMLElement>(".pane")].map((el) => {
-  const r = new Renderer(el.querySelector("canvas")!, atlas);
-  r.setTheme(theme);
-  return { el, r, style: { selected: -1, linked: new Map(), timeOverlay: false } as Style };
-});
+// state
+let theme: Theme = {};
+let panes: { el: HTMLElement; r: Renderer; style: Style; legend: HTMLElement; legendNames: string[] }[] = [];
 let paneCount = 0;
-const timeToggle = $<HTMLInputElement>("#overlay-time");
-
-function restyle(p: number) {
-  const { r, style } = panes[p];
-  style.timeOverlay = timeToggle.checked;
-  r.setScene(r.scene, style);
-}
+let paneNames: string[] = [];
+let latency = NaN;
+let selection: { pane: number; box: number } | null = null;
 
 function boxRect(s: Scene, b: number) {
   return [s.boxes[b * 4], s.boxes[b * 4 + 1], s.boxes[b * 4 + 2], s.boxes[b * 4 + 3]];
 }
 
-async function select(p: number, box: number) {
+function restyle(p: number) {
+  const { r, style } = panes[p];
+  r.setScene(r.scene, style);
+}
+
+// overlays
+async function applyOverlay() {
+  const mode = overlaySel.value;
+  const cat = mode !== "none" && mode !== "time";
+  const res = cat ? await rpc({ op: "overlay", mode }) : [];
+  panes.slice(0, paneCount).forEach((p, i) => {
+    p.style.overlay = mode;
+    p.style.cats = cat ? res[i]?.cats : undefined;
+    const names: string[] = cat && res[i]?.legend ? res[i].legend.split("\n") : [];
+    p.legendNames = names;
+    p.style.palette = names.map((_, k) => theme[mode === "precision" ? PRECISION_CATS[k] : CATS[Math.min(k, CATS.length - 1)]]);
+    renderLegend(i);
+    restyle(i);
+  });
+}
+
+function renderLegend(i: number) {
+  const { legend, style, legendNames, r } = panes[i];
+  legend.replaceChildren();
+  if (style.overlay === "time") {
+    const s = r.scene;
+    const max = s ? Math.max(0, ...[...s.times].filter((t, b) => s.kinds[b] !== Kind.Frame && t > 0)) : 0;
+    if (!max) return;
+    const ramp = ["time-0", "time-1", "time-2", "time-3", "time-4", "time-5"].map((k) => css(theme[k])).join(",");
+    legend.append(h("li", {}, h("i", { class: "ramp", style: `background: linear-gradient(90deg, ${ramp})` }), `0 to ${us(max)}`));
+    return;
+  }
+  if (!style.cats) return;
+  const present = new Set(style.cats);
+  legendNames.forEach((name, k) => {
+    if (!present.has(k) || k >= CATS.length) return;
+    legend.append(h("li", {}, h("i", { style: `background: ${css(style.palette![k])}` }), k === CATS.length - 1 && legendNames.length > CATS.length ? "other" : name));
+  });
+}
+
+// selection
+async function select(p: number, box: number, opts: { center?: boolean } = {}) {
   for (const q of panes) {
     q.style.selected = -1;
     q.style.linked = new Map();
   }
+  selection = box >= 0 ? { pane: p, box } : null;
   panes[p].style.selected = box;
   if (box >= 0) {
-    const res = await rpc({ op: "select", pane: p, box });
-    info.textContent = res.text;
-    const o = 1 - p;
+    const [linked, insp] = await Promise.all([rpc({ op: "select", pane: p, box }), rpc({ op: "inspect", pane: p, box })]);
+    info.textContent = linked.text;
     if (paneCount > 1) {
-      res.boxes.forEach((b: number, i: number) => panes[o].style.linked.set(b, res.grades[i]));
-      revealLinked(o, res.boxes);
+      linked.boxes.forEach((b: number, i: number) => panes[1 - p].style.linked.set(b, linked.grades[i]));
+      revealLinked(1 - p, linked.boxes);
     }
-  } else info.textContent = "";
+    const title = panes[p].r.scene!.labels.split("\n")[box]?.split("\t")[0] ?? "";
+    renderInspector($("#inspect-main"), $("#inspect-links"), $("#inspector-meta"), insp, paneNames, title, follow);
+    if (opts.center) centerOn(p, box);
+  } else {
+    info.textContent = "";
+  }
   for (let q = 0; q < paneCount; q++) restyle(q);
+}
+
+function centerOn(p: number, box: number) {
+  const { r } = panes[p];
+  const [x, y, w, hh] = boxRect(r.scene!, box);
+  if (w * r.view.zoom < 24) r.view.zoom = Math.min(1.2, 120 / Math.max(w, 1));
+  r.anchor(x + w / 2, y + hh / 2, r.canvas.clientWidth / 2, r.canvas.clientHeight / 2);
 }
 
 /** Pan the other pane to the linked boxes when none of them is on screen. */
@@ -86,32 +139,93 @@ function revealLinked(p: number, boxes: Uint32Array) {
   const { r } = panes[p], s = r.scene;
   if (!s || !boxes.length) return;
   const cw = r.canvas.clientWidth, ch = r.canvas.clientHeight;
-  const onScreen = [...boxes].some((b) => {
-    const [x, y, w, h] = boxRect(s, b);
+  const visible = [...boxes].some((b) => {
+    const [x, y, w, hh] = boxRect(s, b);
     const [sx, sy] = [(x - r.view.x) * r.view.zoom, (y - r.view.y) * r.view.zoom];
-    return sx + w * r.view.zoom > 0 && sy + h * r.view.zoom > 0 && sx < cw && sy < ch;
+    return sx + w * r.view.zoom > 0 && sy + hh * r.view.zoom > 0 && sx < cw && sy < ch;
   });
-  if (onScreen) return;
-  const [x, y, w, h] = boxRect(s, boxes[0]);
-  r.anchor(x + w / 2, y + h / 2, cw / 2, ch / 2);
+  if (!visible) {
+    const [x, y, w, hh] = boxRect(s, boxes[0]);
+    r.anchor(x + w / 2, y + hh / 2, cw / 2, ch / 2);
+  }
+}
+
+async function afterSceneChange(p: number, scene: Scene, wasmBytes: number) {
+  panes[p].r.scene = scene;
+  if (overlaySel.value !== "none" && overlaySel.value !== "time") await applyOverlay();
+  else renderLegend(p);
+  report(wasmBytes);
 }
 
 async function toggle(p: number, box: number, op: "toggle" | "step", delta = 1) {
   const { r } = panes[p];
-  const s = r.scene!;
-  const [x, y] = boxRect(s, box);
+  const [x, y] = boxRect(r.scene!, box);
   const [sx, sy] = [(x - r.view.x) * r.view.zoom, (y - r.view.y) * r.view.zoom];
   const res = await rpc({ op, pane: p, box, delta });
   if (res.anchor < 0) return;
-  r.scene = res.scene;
+  await afterSceneChange(p, res.scene, res.wasmBytes);
   const [nx, ny] = boxRect(res.scene, res.anchor);
   r.anchor(nx, ny, sx, sy);
   await select(p, res.anchor);
-  report(res.wasmBytes);
 }
 
+/** Open whatever hides a node (or group) and select it. */
+async function reveal(p: number, target: number, group = false) {
+  if (p >= paneCount) return;
+  const res = await rpc({ op: "reveal", pane: p, target, group });
+  await afterSceneChange(p, res.scene, res.wasmBytes);
+  if (res.box >= 0) await select(p, res.box, { center: true });
+  else info.textContent = "that node is a folded constant and is not drawn";
+}
+const follow = (p: number, node: number) => reveal(p, node);
+
+// findings
+async function loadFindings() {
+  const items: Finding[] = paneCount ? await rpc({ op: "findings" }) : [];
+  renderFindings($("#findings-body"), items, (f, k) => {
+    const [p, id, group] = f.targets[k];
+    reveal(p, id, group === 1);
+  });
+}
+
+// search
+const searchInput = $<HTMLInputElement>("#search");
+const results = $<HTMLUListElement>("#results");
+let searchTimer = 0;
+searchInput.addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(async () => {
+    const q = searchInput.value.trim();
+    results.replaceChildren();
+    if (!q || !paneCount) {
+      results.hidden = true;
+      return;
+    }
+    const hits: { pane: number; node: number; name: string; op: string }[] = await rpc({ op: "search", query: q });
+    for (const hit of hits) {
+      const li = h("li", {}, h("span", { class: "tag" }, hit.pane === 0 ? "src" : "cmp"), h("span", {}, hit.op), h("span", {}, hit.name));
+      li.addEventListener("click", () => {
+        results.hidden = true;
+        reveal(hit.pane, hit.node);
+      });
+      results.append(li);
+    }
+    if (!hits.length) results.append(h("li", { class: "empty" }, "no match"));
+    results.hidden = false;
+  }, 150);
+});
+searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") (results.querySelector("li:not(.empty)") as HTMLElement | null)?.click();
+  if (e.key === "Escape") {
+    results.hidden = true;
+    searchInput.blur();
+  }
+});
+document.addEventListener("click", (e) => { if (!(e.target as HTMLElement).closest(".search")) results.hidden = true; });
+
 // interaction
-panes.forEach(({ r }, p) => {
+function bindPane(p: number) {
+  const { r } = panes[p];
   const c = r.canvas;
   let drag: { x: number; y: number; moved: boolean } | null = null;
   c.addEventListener("pointerdown", (e) => {
@@ -146,24 +260,26 @@ panes.forEach(({ r }, p) => {
     e.preventDefault();
     r.zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)));
   }, { passive: false });
-});
+}
 
 window.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  if (e.key === "/") {
+    e.preventDefault();
+    searchInput.focus();
+  }
   if (e.key === "f") panes.forEach(({ r }) => r.fit());
-  const p = panes.findIndex((q) => q.style.selected >= 0);
-  if (p < 0) return;
-  const box = panes[p].style.selected;
-  if (e.key === "Enter") toggle(p, box, "toggle");
-  if (e.key === "]" || e.key === "[") toggle(p, box, "step", e.key === "]" ? 1 : -1);
-  if (e.key === "Escape") select(p, -1);
+  if (!selection) return;
+  if (e.key === "Enter") toggle(selection.pane, selection.box, "toggle");
+  if (e.key === "]" || e.key === "[") toggle(selection.pane, selection.box, "step", e.key === "]" ? 1 : -1);
+  if (e.key === "Escape") select(selection.pane, -1);
 });
 
-new ResizeObserver(() => panes.forEach(({ r }) => r.resize())).observe(panesEl);
-timeToggle.addEventListener("change", () => { for (let p = 0; p < paneCount; p++) restyle(p); });
+overlaySel.addEventListener("change", applyOverlay);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   theme = readTheme();
-  panes.forEach(({ r }, p) => { r.setTheme(theme); if (p < paneCount) restyle(p); });
+  panes.forEach(({ r }) => r.setTheme(theme));
+  applyOverlay();
 });
 
 // loading
@@ -172,35 +288,45 @@ let loadStart = 0;
 function report(wasmBytes: number) {
   const heap = (performance as any).memory?.usedJSHeapSize as number | undefined;
   const mb = (b: number) => `${(b / 2 ** 20).toFixed(0)} MiB`;
-  perf.dataset.wasm = String(wasmBytes);
   perf.textContent = `${perf.dataset.load ?? ""}  wasm ${mb(wasmBytes)}${heap ? `  js ${mb(heap)}` : ""}`;
+}
+
+function showLanding(show: boolean) {
+  landing.hidden = !show;
+  if (show) $<HTMLElement>("#crumbs").textContent = "/ start";
 }
 
 async function load(files: File[]) {
   if (!files.length) return;
   loadStart = performance.now();
+  showLanding(false);
   $<HTMLElement>("#loading").hidden = false;
   try {
     const res = await rpc({ op: "load", files, flat: params.has("flat") });
     const tParsed = performance.now();
     paneCount = res.scenes.length;
+    latency = res.latency;
+    paneNames = paneCount > 1 ? (res.label ? ["source", "compiled"] : ["graph a", "graph b"]) : ["source"];
     panesEl.classList.toggle("single", paneCount < 2);
-    $<HTMLElement>("#empty").classList.add("hidden");
     const names = files.map((f) => f.name).join(" + ");
     $<HTMLElement>("#crumbs").textContent = `/ ${names}${res.label ? " / " + res.label : ""}`;
+    selection = null;
     panes.forEach(({ el, r, style }, p) => {
       style.selected = -1;
       style.linked = new Map();
       r.resize();
-      r.setScene(res.scenes[p] ?? null, style);
+      r.scene = res.scenes[p] ?? null;
       r.fit();
-      const lat = p === 1 && res.latency === res.latency ? `  latency ${(res.latency / 1000).toFixed(2)} ms` : "";
+      const lat = p === 1 && latency === latency ? `  latency ${us(latency)}` : "";
       el.querySelector(".meta")!.textContent = res.nodes[p] !== undefined ? `${res.nodes[p]} nodes${lat}` : "";
-      el.querySelector(".title")!.textContent = p === 0 ? "source" : res.label ? "compiled" : "graph b";
+      el.querySelector(".title")!.textContent = paneNames[p] ?? "";
     });
-    timeToggle.checked = paneCount > 1 && res.latency === res.latency;
-    for (let p = 0; p < paneCount; p++) restyle(p);
-    // time to the first drawn frame of every pane
+    overlaySel.value = paneCount > 1 && latency === latency ? "time" : "none";
+    await applyOverlay();
+    $("#inspect-main").replaceChildren(h("p", { class: "hint" }, "Select a node. Double-click a block to open it; [ and ] step through a stack."));
+    $("#inspect-links").replaceChildren();
+    $("#inspector-meta").textContent = "";
+    loadFindings();
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
     const total = performance.now() - loadStart;
     const boxes = res.scenes.reduce((n: number, s: Scene) => n + s.kinds.length, 0);
@@ -211,6 +337,7 @@ async function load(files: File[]) {
   } catch (err) {
     info.textContent = `error: ${(err as Error).message}`;
     console.error(err);
+    if (!paneCount) showLanding(true);
   } finally {
     $<HTMLElement>("#loading").hidden = true;
   }
@@ -230,10 +357,8 @@ function bench() {
     active.forEach(({ r }, p) => {
       const s = r.scene!, t = i / 300;
       const phase = (1 - Math.cos(t * Math.PI * 4)) / 2; // 0 = fit, 1 = 1:1 zoom
-      const z = start[p].zoom * Math.pow(Math.max(1, 1 / start[p].zoom), phase);
-      const cx = s.width * (0.5 + 0.4 * Math.sin(t * Math.PI * 2)), cy = s.height * t;
-      r.view.zoom = z;
-      r.anchor(cx, cy, r.canvas.clientWidth / 2, r.canvas.clientHeight / 2);
+      r.view.zoom = start[p].zoom * Math.pow(Math.max(1, 1 / start[p].zoom), phase);
+      r.anchor(s.width * (0.5 + 0.4 * Math.sin(t * Math.PI * 2)), s.height * t, r.canvas.clientWidth / 2, r.canvas.clientHeight / 2);
       r.draw();
       r.gl.finish(); // bench only: include GPU completion in the draw cost
     });
@@ -252,39 +377,70 @@ function bench() {
   requestAnimationFrame(step);
 }
 
-const fileInput = $<HTMLInputElement>("#file");
-$<HTMLButtonElement>("#open").addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => load([...(fileInput.files ?? [])]));
-const empty = $<HTMLElement>("#empty");
-window.addEventListener("dragover", (e) => { e.preventDefault(); empty.classList.add("drag"); });
-window.addEventListener("dragleave", () => empty.classList.remove("drag"));
-window.addEventListener("drop", (e) => {
-  e.preventDefault();
-  empty.classList.remove("drag");
-  load([...(e.dataTransfer?.files ?? [])]);
-});
-
-// ?src=<url>[&cmp=<url>]: load by URL (demo bundles, benchmarks)
 async function fetchFile(url: string): Promise<File> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   return new File([await res.blob()], url.split("/").pop()!);
 }
-const urls = [params.get("src"), params.get("cmp")].filter((u): u is string => !!u);
-if (urls.length) {
-  loadStart = performance.now();
-  Promise.all(urls.map(fetchFile)).then(load, (e) => (info.textContent = `error: ${e.message}`));
+
+/** Demo bundles appear when demo/index.json exists: [{ "title": "...", "files": ["demo/x.afterpass.json.gz"] }]. */
+async function loadDemos() {
+  try {
+    const res = await fetch("demo/index.json");
+    if (!res.ok) return;
+    const demos: { title: string; files: string[] }[] = await res.json();
+    const ul = $("#demos ul");
+    for (const d of demos) {
+      const b = h("button", {}, d.title);
+      b.addEventListener("click", async () => load(await Promise.all(d.files.map(fetchFile))));
+      ul.append(h("li", {}, b));
+    }
+    $("#demos").hidden = !demos.length;
+  } catch {
+    // no demos
+  }
 }
 
-// empty-state texture: our own token soup, chrome only
-const TOKENS = "fuse lower tile emit pass kernel reorder fp16 int8 bf16 nchw nhwc %0 %1 -> => :: {} [] () 0x1f gemm conv mvn rope sdpa x4 x12 x64 ; | / * + -".split(" ");
-const ascii = $<HTMLElement>(".ascii");
-let seed = 7;
-const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-ascii.textContent = Array.from({ length: 80 }, () => {
-  let line = "";
-  while (line.length < 260) line += (rand() < 0.12 ? "    " : TOKENS[Math.floor(rand() * TOKENS.length)]) + " ";
-  return line;
-}).join("\n");
+// start
+async function start() {
+  await document.fonts.load('40px "Source Code Pro"').catch(() => undefined);
+  theme = readTheme();
+  const atlas = buildAtlas(getComputedStyle(document.documentElement).getPropertyValue("--font-mono") || "monospace");
+  panes = [...document.querySelectorAll<HTMLElement>(".pane")].map((el) => {
+    const r = new Renderer(el.querySelector("canvas")!, atlas);
+    r.setTheme(theme);
+    return { el, r, style: { selected: -1, linked: new Map(), overlay: "none" }, legend: el.querySelector(".legend")!, legendNames: [] };
+  });
+  panes.forEach((_, p) => bindPane(p));
+  new ResizeObserver(() => panes.forEach(({ r }) => r.resize())).observe(panesEl);
 
-if (import.meta.env.DEV) (window as any).__ap = { panes, rpc };
+  scramble(document);
+  asciiTexture($(".landing .ascii"));
+  ticker($(".ticker-track"), ["source graph", "compiled graph", "fused kernels", "provenance", "openvino", "tensorrt", "time", "precision", "layout", "reorders", "x48 blocks", "30B in 133 ms"]);
+  const fileInput = $<HTMLInputElement>("#file");
+  for (const id of ["#open", "#open-landing"]) $(id).addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => load([...(fileInput.files ?? [])]));
+  $("#home").addEventListener("click", () => showLanding(landing.hidden !== false));
+  window.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("drag"); });
+  window.addEventListener("dragleave", () => document.body.classList.remove("drag"));
+  window.addEventListener("drop", (e) => {
+    e.preventDefault();
+    document.body.classList.remove("drag");
+    load([...(e.dataTransfer?.files ?? [])]);
+  });
+  loadDemos();
+
+  // ?src=<url>[&cmp=<url>]: load by URL (demo bundles, benchmarks); skips the loading screen
+  const urls = [params.get("src"), params.get("cmp")].filter((u): u is string => !!u);
+  const loaderEl = $("#loader");
+  if (urls.length || params.has("bench")) loaderEl.remove();
+  else loader(loaderEl);
+  if (urls.length) {
+    loadStart = performance.now();
+    Promise.all(urls.map(fetchFile)).then(load, (e) => (info.textContent = `error: ${e.message}`));
+  }
+}
+
+start();
+
+if (import.meta.env.DEV) (window as any).__ap = { get panes() { return panes; }, rpc };

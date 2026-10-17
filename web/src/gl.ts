@@ -23,7 +23,10 @@ export interface Style {
   selected: number;
   /** linked box -> best provenance grade (0 explicit, 1 inferred) */
   linked: Map<number, number>;
-  timeOverlay: boolean;
+  /** "time" for the heat ramp; any other mode colours boxes by `cats` through `palette` */
+  overlay: string;
+  cats?: Uint16Array;
+  palette?: RGBA[];
 }
 
 const BOX_VS = `#version 300 es
@@ -239,7 +242,7 @@ export class Renderer {
     const maxTime = scene.times.reduce((m, v, i) => (scene.kinds[i] !== Kind.Frame && v > m ? v : m), 0);
     const ramp = [t["time-0"], t["time-1"], t["time-2"], t["time-3"], t["time-4"], t["time-5"]];
     const heat = (v: number): RGBA | null => {
-      if (!style.timeOverlay || !(v > 0) || maxTime <= 0) return null;
+      if (style.overlay !== "time" || !(v > 0) || maxTime <= 0) return null;
       const k = Math.min(1, Math.log1p(v) / Math.log1p(maxTime)) * (ramp.length - 1);
       const i = Math.floor(k), f = k - i, a = ramp[i], b = ramp[Math.min(i + 1, ramp.length - 1)];
       return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, 1];
@@ -259,7 +262,9 @@ export class Renderer {
       if (kind === Kind.Group || kind === Kind.Stack) { fill = t["bg-panel"]; stroke = t["rule"]; radius = 2; }
       if (kind === Kind.Frame) { fill = t["bg"]; stroke = t["rule"]; radius = 4; }
       if (kind === Kind.Port) { fill = t["edge"]; stroke = t["edge"]; radius = 100; border = 0; }
-      const h = kind !== Kind.Frame ? heat(scene.times[i]) : null;
+      let h = kind !== Kind.Frame ? heat(scene.times[i]) : null;
+      const cat = style.cats && kind !== Kind.Frame && kind !== Kind.Port ? style.cats[i] : 65535;
+      if (cat !== 65535 && style.palette) h = style.palette[Math.min(cat, style.palette.length - 1)];
       if (h) fill = h;
       if (scene.flags[i] & 1) { stroke = t["warn"]; border = 1.5; }
       const link = style.linked.get(i);
@@ -292,7 +297,8 @@ export class Renderer {
     const [title, sub] = label.split("\t");
     const b = scene.boxes, x = b[i * 4], y = b[i * 4 + 1], w = b[i * 4 + 2], h = b[i * 4 + 3];
     const kind = scene.kinds[i], t = this.theme;
-    const ink = heat && heat[0] + heat[1] + heat[2] > 1.8 ? t["bg"] : t["node-text"];
+    const light = (c: RGBA) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] > 0.55;
+    const ink = heat ? (light(heat) ? [0.08, 0.07, 0.06, 1] as RGBA : [0.95, 0.93, 0.9, 1] as RGBA) : t["node-text"];
     if (kind === Kind.Node) {
       this.text(out, title, x + 8, y + h / 2 + FONT * 0.35, FONT, w - 14, ink);
     } else if (kind === Kind.Frame) {

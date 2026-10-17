@@ -58,7 +58,9 @@ export function buildAtlas(fontFamily: string, size = 40, buffer = 6, radius = 8
   const rows = Math.ceil(CHARS.length / cols);
   const width = cols * cell, height = rows * cell;
   const data = new Uint8Array(width * height);
-  const canvas = new OffscreenCanvas(cell, cell);
+  // a document canvas (not OffscreenCanvas) so the self-hosted font in document.fonts is used
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = cell;
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   ctx.font = `${size}px ${fontFamily}`;
   ctx.textBaseline = "alphabetic";

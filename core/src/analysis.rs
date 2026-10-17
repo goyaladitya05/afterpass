@@ -24,16 +24,88 @@ pub fn data_path(p: &Pane, v: usize) -> bool {
     !p.hier.folded[v] && !IO.contains(&p.graph.nodes[v].op.as_str())
 }
 
-/// Recover links the runtime's names lost. A source op nobody claims, whose outputs (through other unclaimed
-/// ops) reach exactly one compiled kernel, was computed inside that kernel or eliminated by it. Pattern fusions
-/// that keep only the last op's name (OpenVINO RMS, RoPE, GELU, SiLU) and layout ops absorbed by TensorRT
-/// Myelin are recovered this way. Links are graded inferred, via structure. Returns how many were added.
-pub fn infer_structure(src: &Pane, links: &mut Links) -> usize {
-    let n = src.graph.nodes.len();
+/// Recover links the runtime's names lost, in two passes, all graded inferred via structure.
+///
+/// 1. Compiled kernels whose claimed names match nothing (a fused MoE kernel named `ReduceSum_123/MOECompressed`)
+///    are grouped into connected clusters. The source ops lying between the sources of the cluster's nearest
+///    linked upstream kernels and those of its nearest linked downstream kernels are linked to the cluster.
+/// 2. A remaining source op nobody claims, whose outputs (through other unclaimed ops) reach exactly one kernel,
+///    was computed inside that kernel or eliminated by it: pattern fusions that keep only the last op's name
+///    (OpenVINO RMS, RoPE, GELU, SiLU) and layout ops absorbed by TensorRT Myelin.
+///
+/// Returns how many source ops gained a link.
+pub fn infer_structure(src: &Pane, cmp: &Pane, links: &mut Links) -> usize {
+    let (ns, nc) = (src.graph.nodes.len(), cmp.graph.nodes.len());
+    let named: Vec<bool> = (0..ns).map(|v| !links[0][v].is_empty()).collect();
+    let mut linked_src = vec![false; ns];
+    let mut add = |links: &mut Links, v: usize, k: u32, linked_src: &mut Vec<bool>| {
+        links[0][v].push(LinkRef { other: k, grade: Grade::Inferred, via: Via::Structure });
+        links[1][k as usize].push(LinkRef { other: v as u32, grade: Grade::Inferred, via: Via::Structure });
+        linked_src[v] = true;
+    };
+
+    // pass 1: clusters of compiled kernels without a resolvable claim
+    let orphan = |links: &Links, k: usize| data_path(cmp, k) && links[1][k].is_empty();
+    let mut seen = vec![false; nc];
+    for k0 in 0..nc {
+        if seen[k0] || !orphan(links, k0) {
+            continue;
+        }
+        let (mut cluster, mut stack) = (Vec::new(), vec![k0]);
+        let (mut up, mut down) = (Vec::new(), Vec::new());
+        seen[k0] = true;
+        while let Some(k) = stack.pop() {
+            cluster.push(k as u32);
+            for (nb, dir) in [(&cmp.preds[k], &mut up), (&cmp.succs[k], &mut down)] {
+                for &w in nb {
+                    let w = w as usize;
+                    if orphan(links, w) {
+                        if !seen[w] {
+                            seen[w] = true;
+                            stack.push(w);
+                        }
+                    } else if !links[1][w].is_empty() {
+                        dir.push(w);
+                    }
+                }
+            }
+        }
+        let sources = |ks: &[usize]| -> Vec<usize> {
+            ks.iter().flat_map(|&k| links[1][k].iter().map(|l| l.other as usize)).collect()
+        };
+        let (sa, sd) = (sources(&up), sources(&down));
+        let (Some(&lo), Some(&hi)) = (sa.iter().min(), sd.iter().max()) else { continue };
+        // forward from upstream sources and backward from downstream sources, within [lo, hi]
+        let reach = |starts: &[usize], adj: &[Vec<u32>]| -> Vec<bool> {
+            let mut mark = vec![false; ns];
+            let mut st: Vec<usize> = starts.to_vec();
+            while let Some(v) = st.pop() {
+                for &w in &adj[v] {
+                    let w = w as usize;
+                    if w >= lo && w <= hi && !mark[w] {
+                        mark[w] = true;
+                        st.push(w);
+                    }
+                }
+            }
+            mark
+        };
+        let (fwd, bwd) = (reach(&sa, &src.succs), reach(&sd, &src.preds));
+        let region: Vec<usize> = (lo..=hi).filter(|&v| fwd[v] && bwd[v] && !named[v] && !linked_src[v] && data_path(src, v)).collect();
+        if region.len() > 50_000 {
+            continue;
+        }
+        for v in region {
+            for &k in &cluster {
+                add(links, v, k, &mut linked_src);
+            }
+        }
+    }
+
+    // pass 2: unclaimed source ops whose outputs reach exactly one kernel
     // reach[v]: None = reaches no kernel yet, Some(k) = exactly kernel k, Some(NONE) = several
-    let mut reach: Vec<Option<u32>> = vec![None; n];
-    let mut added = 0;
-    for v in (0..n).rev() {
+    let mut reach: Vec<Option<u32>> = vec![None; ns];
+    for v in (0..ns).rev() {
         if !data_path(src, v) {
             continue;
         }
@@ -54,12 +126,10 @@ pub fn infer_structure(src: &Pane, links: &mut Links) -> usize {
         }
         reach[v] = r;
         if let Some(k) = r.filter(|&k| k != NONE) {
-            links[0][v].push(LinkRef { other: k, grade: Grade::Inferred, via: Via::Structure });
-            links[1][k as usize].push(LinkRef { other: v as u32, grade: Grade::Inferred, via: Via::Structure });
-            added += 1;
+            add(links, v, k, &mut linked_src);
         }
     }
-    added
+    linked_src.iter().filter(|&&x| x).count()
 }
 
 /// Compute precision class of a dtype or runtime precision string, or None for index and bool types.
@@ -219,7 +289,7 @@ pub fn findings(panes: &[Pane], links: &Links, latency_us: Option<f32>, inferred
         for (op, (vs, t)) in ins {
             let time = if t > 0.0 { format!(", {}", fmt_us(t)) } else { String::new() };
             out.push(item("inserted", "info", format!("{op}  x{}", vs.len()),
-                format!("inserted by the runtime, no source op{time}"), vs.iter().map(|&v| node_target(1, v)).collect()));
+                format!("no source op matches the names they claim: inserted by the runtime or renamed{time}"), vs.iter().map(|&v| node_target(1, v)).collect()));
         }
         // precision fallbacks against the dominant compute precision (by time when profiled)
         let mut weight: HashMap<&str, f32> = HashMap::new();

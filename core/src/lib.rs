@@ -70,7 +70,7 @@ impl Session {
                     s.links[1][l.compiled as usize].push(LinkRef { other: l.source, grade: l.grade, via: l.via });
                 }
             }
-            s.inferred = analysis::infer_structure(&s.panes[0], &mut s.links);
+            s.inferred = analysis::infer_structure(&s.panes[0], &s.panes[1], &mut s.links);
         }
         s
     }

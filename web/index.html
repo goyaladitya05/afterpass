@@ -3,37 +3,83 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="See what a deployment compiler did to your model: source and compiled graphs side by side, every fused kernel traced to its source ops." />
     <title>afterpass</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <div class="loader" id="loader" aria-hidden="true"><pre></pre></div>
+
     <header class="topbar">
-      <span class="mark">afterpass</span>
-      <nav class="crumbs" id="crumbs">/ no model</nav>
+      <button class="mark" id="home" title="Back to the start page">afterpass</button>
+      <nav class="crumbs" id="crumbs">/ start</nav>
       <span class="spacer"></span>
-      <label class="toggle"><input type="checkbox" id="overlay-time" /> <span>time</span></label>
+      <label class="field" title="Colour nodes by">
+        <span class="label">overlay</span>
+        <select id="overlay">
+          <option value="none">none</option>
+          <option value="time">time</option>
+          <option value="precision">precision</option>
+          <option value="layout">layout</option>
+          <option value="device">device</option>
+          <option value="kernel">kernel type</option>
+        </select>
+      </label>
+      <div class="search">
+        <input id="search" type="search" placeholder="search ops  /" autocomplete="off" spellcheck="false" />
+        <ul class="results" id="results" hidden></ul>
+      </div>
       <button class="btn" id="open"><span data-label="load">load</span></button>
       <input type="file" id="file" multiple hidden accept=".onnx,.xml,.gz,.json" />
     </header>
-    <main class="panes" id="panes">
-      <section class="pane" data-pane="0">
-        <div class="pane-head"><span class="num">001</span><span class="title">source</span><span class="meta"></span></div>
-        <canvas></canvas>
-      </section>
-      <section class="pane" data-pane="1">
-        <div class="pane-head"><span class="num">002</span><span class="title">compiled</span><span class="meta"></span></div>
-        <canvas></canvas>
-      </section>
-      <div class="empty" id="empty">
-        <pre class="ascii" aria-hidden="true"></pre>
-        <div class="empty-text">
-          <p class="label">001 / open</p>
-          <p>Drop an afterpass bundle, an ONNX model or an OpenVINO IR <code>.xml</code>.</p>
-          <p class="faint">Nothing is uploaded. Weights are never read.</p>
-        </div>
+
+    <main class="workspace" id="workspace">
+      <div class="panes" id="panes">
+        <section class="pane" data-pane="0">
+          <div class="pane-head"><span class="num">001</span><span class="title">source</span><span class="meta"></span></div>
+          <canvas></canvas>
+          <ul class="legend"></ul>
+        </section>
+        <section class="pane" data-pane="1">
+          <div class="pane-head"><span class="num">002</span><span class="title">compiled</span><span class="meta"></span></div>
+          <canvas></canvas>
+          <ul class="legend"></ul>
+        </section>
+        <div class="loading" id="loading" hidden><span class="label">parsing</span><span class="bar"></span></div>
       </div>
-      <div class="loading" id="loading" hidden><span class="label">parsing</span><span class="bar"></span></div>
+      <aside class="findings" id="findings">
+        <div class="panel-head"><span class="num">003</span><span class="title">findings</span></div>
+        <div class="findings-body" id="findings-body"></div>
+      </aside>
+      <section class="inspector" id="inspector">
+        <div class="panel-head"><span class="num">004</span><span class="title">inspector</span><span class="meta" id="inspector-meta"></span></div>
+        <div class="inspector-body">
+          <div class="inspect-main" id="inspect-main"><p class="hint">Select a node. Double-click a block to open it; <kbd>[</kbd> <kbd>]</kbd> step through a stack.</p></div>
+          <div class="inspect-links" id="inspect-links"></div>
+        </div>
+      </section>
     </main>
+
+    <section class="landing" id="landing">
+      <pre class="ascii" aria-hidden="true"></pre>
+      <div class="landing-inner">
+        <p class="label">compiler explorer for model graphs</p>
+        <h1>afterpass</h1>
+        <p class="lead">See what a deployment compiler did to your model. Source graph next to compiled graph, every fused kernel traced back to the ops it came from.</p>
+        <div class="cta">
+          <button class="btn" id="open-landing"><span data-label="open a model">open a model</span></button>
+          <span class="faint">or drop files anywhere. Nothing is uploaded; weights are never read.</span>
+        </div>
+        <ol class="steps">
+          <li><span class="num">001</span><b>capture</b><span>Compile with OpenVINO or TensorRT and profile it: <code>afterpass capture model.onnx --runtime tensorrt --device GPU</code></span></li>
+          <li><span class="num">002</span><b>open</b><span>Load the bundle here, or an ONNX model or OpenVINO IR on its own. 30B-class graphs open in under a second.</span></li>
+          <li><span class="num">003</span><b>trace</b><span>Click a kernel to see its source ops. Findings list time sinks, unaccounted ops, inserted reorders and precision fallbacks.</span></li>
+        </ol>
+        <div class="demos" id="demos" hidden><p class="label">demos</p><ul></ul></div>
+      </div>
+      <div class="ticker" aria-hidden="true"><div class="ticker-track"></div></div>
+    </section>
+
     <footer class="status"><span id="info"></span><span class="spacer"></span><span id="perf"></span></footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
