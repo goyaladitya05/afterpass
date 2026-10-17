@@ -101,6 +101,9 @@ fn bundles_30b() {
         flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
         let s = Session::from_model(bundle::parse(&json).unwrap());
         report(f.file_name().unwrap().to_str().unwrap(), t0, &s);
+        for x in s.findings_json().iter().filter(|x| x["section"] == "time") {
+            println!("  time: {} | {}", x["title"].as_str().unwrap(), x["detail"].as_str().unwrap());
+        }
     }
 }
 
