@@ -416,7 +416,7 @@ async function start() {
 
   scramble(document);
   asciiTexture($(".landing .ascii"));
-  ticker($(".ticker-track"), ["source graph", "compiled graph", "fused kernels", "provenance", "openvino", "tensorrt", "time", "precision", "layout", "reorders", "x48 blocks", "30B in 133 ms"]);
+  ticker($(".ticker-track"), ["source graph", "compiled graph", "fused kernels", "provenance", "openvino", "tensorrt", "time", "precision", "layout", "reorders", "x48 blocks", "30B graphs under a second"]);
   const fileInput = $<HTMLInputElement>("#file");
   for (const id of ["#open", "#open-landing"]) $(id).addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => load([...(fileInput.files ?? [])]));
