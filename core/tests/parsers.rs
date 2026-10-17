@@ -1,0 +1,85 @@
+use std::io::Read;
+
+use afterpass_core::hier::{scope_tokens, Hier};
+use afterpass_core::ir::Grade;
+use afterpass_core::{bundle, onnx, ovir, Session};
+
+fn fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+fn gunzip(b: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    flate2::read::GzDecoder::new(b).read_to_end(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn onnx_topology_without_weights() {
+    let bytes = fixture("toy.onnx");
+    let g = onnx::parse(&mut &bytes[..]).unwrap();
+    assert_eq!(g.nodes.len(), 15);
+    assert_eq!(g.nodes[1].name, "/model/layers.0/fc/MatMul");
+    let w = g.tensors.iter().find(|t| t.name == "layers.0.w").unwrap();
+    assert!(w.constant);
+    assert_eq!(w.shape.as_deref(), Some(&[16, 16][..]));
+    assert_eq!(w.dtype, "float");
+    let logits = g.tensors.iter().find(|t| t.name == "logits").unwrap();
+    assert_eq!(logits.shape.as_deref(), Some(&[1, 8, 4][..]));
+}
+
+#[test]
+fn ir_topology() {
+    let g = ovir::parse(&fixture("toy.xml")).unwrap();
+    assert_eq!(g.nodes.len(), 26);
+    let mm = g.nodes.iter().find(|n| n.name == "/model/layers.0/fc/MatMul").unwrap();
+    assert_eq!(mm.op, "MatMul");
+    let input = &g.tensors[mm.inputs[0] as usize];
+    assert_eq!(g.nodes[input.producer as usize].name, "/embed/Gather");
+    assert_eq!(input.shape.as_deref(), Some(&[1, 8, 16][..]));
+    assert_eq!(g.constant_nodes().iter().filter(|&&c| c).count(), 9);
+}
+
+#[test]
+fn bundles() {
+    for f in ["toy.openvino-cpu.afterpass.json.gz", "toy.tensorrt-gpu.afterpass.json.gz"] {
+        let m = bundle::parse(&gunzip(&fixture(f))).unwrap();
+        assert_eq!(m.source.nodes.len(), 15);
+        let c = m.compiled.as_ref().unwrap();
+        assert!(c.nodes.iter().any(|n| n.time_us.is_some()), "{f}: no times");
+        assert!(m.links.iter().any(|l| l.grade == Grade::Explicit), "{f}: no explicit links");
+        assert!(m.latency_us.unwrap() > 0.0);
+    }
+}
+
+#[test]
+fn scopes() {
+    assert_eq!(scope_tokens("/model/layers.3/attn/MatMul"), ["model", "layers", "3", "attn"]);
+    assert_eq!(scope_tokens("__module.model.layers.17.mlp/aten::view/Reshape"), ["model", "layers", "17", "mlp"]);
+    assert_eq!(scope_tokens("/model.0/conv/Conv + /model.0/act/Mul"), ["model", "0", "conv"]);
+    assert!(scope_tokens("Constant_12").is_empty());
+}
+
+#[test]
+fn stacks_and_outliers() {
+    for g in [onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap(), ovir::parse(&fixture("toy.xml")).unwrap()] {
+        let h = Hier::build(&g, false);
+        assert_eq!(h.stacks.len(), 1);
+        assert_eq!(h.stacks[0].count, 2);
+        let outliers: Vec<&str> = h.groups.iter().filter(|g| g.outlier).map(|g| g.label.as_str()).collect();
+        assert_eq!(outliers, ["2"]);
+    }
+}
+
+#[test]
+fn session_links_both_ways() {
+    let m = bundle::parse(&gunzip(&fixture("toy.tensorrt-gpu.afterpass.json.gz"))).unwrap();
+    let s = Session::from_model(m);
+    assert_eq!(s.panes(), 2);
+    for pane in 0..2 {
+        let sc = &s.pane(pane).scene;
+        assert!(!sc.kinds.is_empty());
+        assert_eq!(sc.boxes.len(), sc.kinds.len() * 4);
+        assert!(sc.width > 0.0 && sc.height > 0.0);
+    }
+}

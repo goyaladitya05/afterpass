@@ -8,7 +8,6 @@ notes/
 *.onnx.data
 *.bin
 *.xml
-!core/tests/fixtures/**
 *.engine
 *.plan
 *.pt
@@ -24,3 +23,6 @@ pkg/
 __pycache__/
 *.egg-info/
 .pytest_cache/
+
+# small parser fixtures are committed
+!core/tests/fixtures/**
