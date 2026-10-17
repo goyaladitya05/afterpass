@@ -26,6 +26,22 @@ requires = ["uv_build>=0.9.5,<0.10.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
+corpus = [
+    "onnxslim>=0.1.98",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
+    "transformers>=5.20.1",
+    "ultralytics>=8.4.178",
+]
 dev = [
     "pytest>=9.1.1",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

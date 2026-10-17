@@ -70,3 +70,11 @@ def test_tensorrt(tiny):
     b = run_capture(tiny, "tensorrt", "GPU")
     check_invariants(b)
     assert explicit_sources(b) == {"conv1", "bn1", "relu1", "add1", "fc"}
+
+
+def test_tensorrt_metadata_claims():
+    trt = pytest.importorskip("afterpass.trt")
+    # as emitted by TensorRT 11 for a Conv fused with its Relu, and for two separate records
+    assert trt._claims("[ONNX Layer: /conv1/Conv]\x1e[ONNX Layer: /relu/Relu]") == ["/conv1/Conv", "/relu/Relu"]
+    assert trt._claims("[ONNX Layer: a]\x1f[ONNX Layer: b]") == ["a", "b"]
+    assert trt._claims("") == []

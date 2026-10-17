@@ -13,6 +13,17 @@ OPSET = 17
 SEQ = 128
 
 
+class ByName(torch.nn.Module):
+    """Call a Hugging Face model with keyword inputs; the legacy exporter passes inputs positionally."""
+
+    def __init__(self, model, names):
+        super().__init__()
+        self.model, self.names = model, names
+
+    def forward(self, *args):
+        return self.model(**dict(zip(self.names, args)), return_dict=False)
+
+
 def export(model, args, path: Path, input_names, output_names):
     path.parent.mkdir(parents=True, exist_ok=True)
     with torch.no_grad():
@@ -31,8 +42,9 @@ def bert(out: Path):
     from transformers import BertModel
     m = BertModel.from_pretrained("google-bert/bert-base-uncased", attn_implementation="eager").eval()
     ids = torch.ones(1, SEQ, dtype=torch.int64)
-    export(m, (ids, torch.ones_like(ids), torch.zeros_like(ids)), out / "bert-base" / "bert-base.onnx",
-           ["input_ids", "attention_mask", "token_type_ids"], ["last_hidden_state", "pooler_output"])
+    names = ["input_ids", "attention_mask", "token_type_ids"]
+    export(ByName(m, names), (ids, torch.ones_like(ids), torch.zeros_like(ids)), out / "bert-base" / "bert-base.onnx",
+           names, ["last_hidden_state", "pooler_output"])
 
 
 def yolo(out: Path):
@@ -49,8 +61,8 @@ def llm(out: Path):
     m = AutoModelForCausalLM.from_pretrained("TinyLlama/TinyLlama-1.1B-Chat-v1.0", dtype=torch.float16,
                                              attn_implementation="eager", use_cache=False).eval()
     ids = torch.ones(1, SEQ, dtype=torch.int64)
-    export(m, (ids, torch.ones_like(ids)), out / "tinyllama-1.1b" / "tinyllama-1.1b.onnx",
-           ["input_ids", "attention_mask"], ["logits"])
+    names = ["input_ids", "attention_mask"]
+    export(ByName(m, names), (ids, torch.ones_like(ids)), out / "tinyllama-1.1b" / "tinyllama-1.1b.onnx", names, ["logits"])
 
 
 if __name__ == "__main__":

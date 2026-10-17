@@ -11,7 +11,8 @@ from cuda.bindings import runtime as cudart
 
 from .util import random_inputs, stats
 
-ONNX_LAYER = re.compile(r"\[ONNX Layer: (.*)\]")
+# Entries look like "[ONNX Layer: X]"; TensorRT 11 separates them with \x1e inside one record and \x1f between records.
+ONNX_LAYER = re.compile(r"\[ONNX Layer: (.*?)\](?=[\x1e\x1f]|$)")
 LAYER_KEYS = ("Name", "LayerType", "Inputs", "Outputs", "Metadata", "TacticName")
 
 
@@ -32,7 +33,7 @@ class Profiler(trt.IProfiler):
 
 
 def _claims(metadata: str) -> list[str]:
-    return [m.group(1) for part in (metadata or "").split("\x1f") if (m := ONNX_LAYER.search(part))]
+    return ONNX_LAYER.findall(metadata or "")
 
 
 def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker) -> dict:
