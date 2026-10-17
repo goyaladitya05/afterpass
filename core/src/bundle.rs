@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 
-use crate::ir::{Grade, Graph, Link, Model, Node, NONE};
+use crate::ir::{Grade, Graph, Link, Model, Node, Via, NONE};
 
 fn s(v: &Value) -> String {
     match v {
@@ -79,6 +79,7 @@ pub fn parse(json: &[u8]) -> Result<Model, String> {
             Some("inferred") => Grade::Inferred,
             _ => Grade::Unknown,
         },
+        via: Via::parse(l["via"].as_str().unwrap_or("")),
     }).collect();
     let c = &b["compiled"];
     Ok(Model {
@@ -86,6 +87,8 @@ pub fn parse(json: &[u8]) -> Result<Model, String> {
         compiled: Some(compiled),
         links,
         label: format!("{} {} {}", s(&c["runtime"]), s(&c["device"]), s(&c["device_name"])).trim().to_string(),
+        runtime: s(&c["runtime"]),
+        device: s(&c["device"]),
         latency_us: b["profile"]["latency"]["median"].as_f64().map(|v| v as f32),
     })
 }

@@ -103,3 +103,28 @@ fn bundles_30b() {
         report(f.file_name().unwrap().to_str().unwrap(), t0, &s);
     }
 }
+
+#[test]
+fn structural_coverage() {
+    for dir in ["bundles", "bundles-lnl", "bundles-30b"] {
+        let Some(d) = corpus(dir) else { continue };
+        let mut files: Vec<_> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()).collect();
+        files.sort();
+        for f in files {
+            let mut json = Vec::new();
+            flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
+            let s = Session::from_model(bundle::parse(&json).unwrap());
+            let src = s.pane(0);
+            let path: Vec<usize> = (0..src.graph.nodes.len()).filter(|&v| afterpass_core::analysis::data_path(src, v)).collect();
+            let by = |structure: bool| path.iter().filter(|&&v| s.links()[0][v].iter().any(|l| structure || l.via != afterpass_core::ir::Via::Structure)).count();
+            let findings = s.findings_json();
+            let mut sections = std::collections::BTreeMap::new();
+            for x in &findings {
+                *sections.entry(x["section"].as_str().unwrap().to_string()).or_insert(0) += 1;
+            }
+            println!("{}: source covered {:.1}% by name, {:.1}% with structure; findings {:?}",
+                f.file_name().unwrap().to_str().unwrap(), 100.0 * by(false) as f64 / path.len() as f64,
+                100.0 * by(true) as f64 / path.len() as f64, sections);
+        }
+    }
+}

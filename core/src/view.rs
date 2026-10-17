@@ -69,8 +69,8 @@ pub struct Pane {
     pub graph: Graph,
     pub compiled: bool,
     pub hier: Hier,
-    preds: Vec<Vec<u32>>,
-    succs: Vec<Vec<u32>>,
+    pub preds: Vec<Vec<u32>>,
+    pub succs: Vec<Vec<u32>>,
     expanded: HashSet<Item>,
     unit: HashMap<u32, u32>,
     cache: HashMap<Frame, Rc<Placed>>,
@@ -457,6 +457,61 @@ impl Pane {
                 (0..stacks.len() as u32).filter(|&t| stacks[t as usize].container == nc).nth(i).map(Item::Stack)
             }
             _ => None,
+        }
+    }
+
+    pub fn box_item(&self, b: u32) -> Option<Item> {
+        self.scene.refs.get(b as usize).map(|r| r.0)
+    }
+
+    /// Expand the groups and stacks around group `g` (and `g` itself when `inclusive`) so it is on screen.
+    fn open_to(&mut self, g: u32, inclusive: bool) {
+        let h = &self.hier;
+        let mut x = if inclusive { g } else { h.groups[g as usize].parent };
+        let mut open = Vec::new();
+        while x != NONE && x != 0 {
+            let gr = &h.groups[x as usize];
+            if gr.stack == NONE {
+                open.push((Item::Group(x), None));
+            } else {
+                let st = &h.stacks[gr.stack as usize];
+                let pos = st.instances.iter().position(|&i| i == x).unwrap_or(0) as u32;
+                open.push((Item::Stack(gr.stack), Some((gr.stack, pos / st.period))));
+                if st.period > 1 {
+                    open.push((Item::Group(x), None)); // a unit of several instances lists them as groups
+                }
+            }
+            x = gr.parent;
+        }
+        for (item, unit) in open {
+            self.expanded.insert(item);
+            if let Some((s, k)) = unit {
+                self.unit.insert(s, k);
+            }
+        }
+        self.cache.clear();
+        self.parent.clear();
+        self.rebuild();
+    }
+
+    /// Bring a node on screen; returns its box, or -1 for nodes that are never drawn (folded constants).
+    pub fn reveal_node(&mut self, v: u32) -> i32 {
+        let g = self.hier.node_group[v as usize];
+        if g == NONE {
+            return -1;
+        }
+        self.open_to(g, true);
+        let b = self.node_box[v as usize];
+        if b == NONE { -1 } else { b as i32 }
+    }
+
+    /// Bring a group on screen without expanding it; returns its box (or the frame showing it), or -1.
+    pub fn reveal_group(&mut self, g: u32) -> i32 {
+        self.open_to(g, false);
+        let gr = &self.hier.groups[g as usize];
+        match self.find(Item::Group(g)) {
+            -1 if gr.stack != NONE => self.find(Item::Stack(gr.stack)),
+            b => b,
         }
     }
 

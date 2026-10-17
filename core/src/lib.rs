@@ -1,5 +1,6 @@
 //! afterpass core: parsers, unified graph IR, collapsing and layout, compiled to wasm and run in a worker.
 
+pub mod analysis;
 pub mod bundle;
 pub mod hier;
 pub mod ir;
@@ -8,9 +9,10 @@ pub mod onnx;
 pub mod ovir;
 pub mod view;
 
-use js_sys::{Float32Array, Function, Object, Reflect, Uint32Array, Uint8Array};
+use js_sys::{Float32Array, Function, Object, Reflect, Uint16Array, Uint32Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
+use analysis::{LinkRef, Links, Overlay};
 use ir::{Grade, Model, NONE};
 use view::Pane;
 
@@ -40,9 +42,12 @@ fn set(o: &Object, k: &str, v: impl Into<JsValue>) {
 #[derive(Default)]
 pub struct Session {
     panes: Vec<Pane>,
-    /// Per node of pane 0 (source): linked compiled nodes with their grade, and the reverse.
-    links: [Vec<Vec<(u32, Grade)>>; 2],
+    links: Links,
+    /// Source ops linked by structure rather than by name.
+    inferred: usize,
     label: String,
+    runtime: String,
+    device: String,
     latency_us: Option<f32>,
 }
 
@@ -52,7 +57,7 @@ impl Session {
     }
 
     fn build(m: Model, flat: bool) -> Session {
-        let mut s = Session { label: m.label, latency_us: m.latency_us, ..Default::default() };
+        let mut s = Session { label: m.label, runtime: m.runtime, device: m.device, latency_us: m.latency_us, ..Default::default() };
         let ns = m.source.nodes.len();
         s.panes.push(Pane::new(m.source, false, flat));
         if let Some(c) = m.compiled {
@@ -61,12 +66,21 @@ impl Session {
             s.links = [vec![Vec::new(); ns], vec![Vec::new(); nc]];
             for l in m.links {
                 if l.source != NONE && (l.source as usize) < ns && (l.compiled as usize) < nc {
-                    s.links[0][l.source as usize].push((l.compiled, l.grade));
-                    s.links[1][l.compiled as usize].push((l.source, l.grade));
+                    s.links[0][l.source as usize].push(LinkRef { other: l.compiled, grade: l.grade, via: l.via });
+                    s.links[1][l.compiled as usize].push(LinkRef { other: l.source, grade: l.grade, via: l.via });
                 }
             }
+            s.inferred = analysis::infer_structure(&s.panes[0], &mut s.links);
         }
         s
+    }
+
+    pub fn links(&self) -> &Links {
+        &self.links
+    }
+
+    pub fn findings_json(&self) -> Vec<serde_json::Value> {
+        analysis::findings(&self.panes, &self.links, self.latency_us, self.inferred)
     }
 
     pub fn pane(&self, i: usize) -> &Pane {
@@ -163,9 +177,9 @@ impl Session {
         let other = 1 - pane;
         let mut best: Vec<(u32, u8)> = Vec::new();
         for v in self.panes[pane].box_nodes(b) {
-            for &(w, g) in &self.links[pane][v as usize] {
-                for ob in self.panes[other].node_boxes([w]) {
-                    best.push((ob, if g == Grade::Explicit { 0 } else { 1 }));
+            for l in &self.links[pane][v as usize] {
+                for ob in self.panes[other].node_boxes([l.other]) {
+                    best.push((ob, if l.grade == Grade::Explicit { 0 } else { 1 }));
                 }
             }
         }
@@ -174,6 +188,37 @@ impl Session {
         set(&o, "boxes", Uint32Array::from(&best.iter().map(|x| x.0).collect::<Vec<_>>()[..]));
         set(&o, "grades", Uint8Array::from(&best.iter().map(|x| x.1).collect::<Vec<_>>()[..]));
         o
+    }
+
+    /// Overlay categories per box: `cats` indexes `legend` (one name per line); 65535 is none.
+    pub fn overlay(&self, pane: usize, mode: &str) -> Object {
+        let o = Object::new();
+        if let Some(m) = Overlay::parse(mode) {
+            let (cats, legend) = analysis::categories(&self.panes[pane], m, &self.runtime, &self.device);
+            set(&o, "cats", Uint16Array::from(&cats[..]));
+            set(&o, "legend", legend.join("\n"));
+        }
+        o
+    }
+
+    /// Findings as JSON: [{section, severity, title, detail, targets: [[pane, id, is_group]]}].
+    pub fn findings(&self) -> String {
+        serde_json::to_string(&self.findings_json()).unwrap_or_default()
+    }
+
+    pub fn search(&self, pane: usize, query: &str, limit: usize) -> String {
+        serde_json::to_string(&analysis::search(&self.panes[pane], query, limit)).unwrap_or_default()
+    }
+
+    /// Inspector data for one box, as JSON.
+    pub fn inspect(&self, pane: usize, b: u32) -> String {
+        analysis::inspect(&self.panes, &self.links, self.latency_us, pane, b).to_string()
+    }
+
+    /// Expand what is needed to show a node (or, with `group`, a group) and return its box, or -1.
+    pub fn reveal(&mut self, pane: usize, id: u32, group: bool) -> i32 {
+        let p = &mut self.panes[pane];
+        if group { p.reveal_group(id) } else { p.reveal_node(id) }
     }
 
     /// Details of one box for the status line: node name, op, kernel, precision, output shapes, attributes.

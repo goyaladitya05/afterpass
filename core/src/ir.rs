@@ -109,11 +109,47 @@ pub enum Grade {
     Unknown,
 }
 
+/// How a link was established: matched on a claimed name, a tensor name, a name prefix, an output port, or
+/// inferred from graph structure (an unclaimed op whose outputs reach a single kernel).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Via {
+    Name,
+    Tensor,
+    Prefix,
+    Port,
+    Structure,
+    Unknown,
+}
+
+impl Via {
+    pub fn parse(s: &str) -> Via {
+        match s {
+            "name" => Via::Name,
+            "tensor" => Via::Tensor,
+            "prefix" => Via::Prefix,
+            "port" => Via::Port,
+            _ => Via::Unknown,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Via::Name => "name",
+            Via::Tensor => "tensor",
+            Via::Prefix => "prefix",
+            Via::Port => "port",
+            Via::Structure => "structure",
+            Via::Unknown => "",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Link {
     pub compiled: u32,
     pub source: u32,
     pub grade: Grade,
+    pub via: Via,
 }
 
 /// What one load produced: a source graph, optionally a compiled graph with provenance.
@@ -124,6 +160,8 @@ pub struct Model {
     pub links: Vec<Link>,
     /// Short description for the UI, for example "openvino 2026.4.1 GPU (Arc 140V)".
     pub label: String,
+    pub runtime: String,
+    pub device: String,
     /// Median whole-inference latency, when profiled.
     pub latency_us: Option<f32>,
 }

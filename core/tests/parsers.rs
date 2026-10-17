@@ -115,3 +115,53 @@ fn stepping_a_stack_keeps_inner_expansion() {
     assert!(t.iter().any(|t| t.contains("unit 2/2")));
     assert!(t.iter().any(|t| t == "MatMul"), "fc group of the next unit should stay expanded: {t:?}");
 }
+
+#[test]
+fn structure_recovers_ops_whose_names_were_lost() {
+    use afterpass_core::ir::{Graph, Link, Model, Node, Via};
+    // source a -> b -> c, compiled kernel k claims a and c (b's name was dropped by a pattern fusion)
+    let mut src = Graph::default();
+    let (x, ta, tb, tc) = (src.tensor("x"), src.tensor("ta"), src.tensor("tb"), src.tensor("tc"));
+    for (name, i, o) in [("/m/a", x, ta), ("/m/b", ta, tb), ("/m/c", tb, tc)] {
+        src.nodes.push(Node { name: name.into(), op: "Op".into(), inputs: vec![i], outputs: vec![o], ..Default::default() });
+    }
+    src.finish();
+    let mut cmp = Graph::default();
+    let (cx, cy) = (cmp.tensor("x"), cmp.tensor("y"));
+    cmp.nodes.push(Node { name: "k".into(), op: "Fused".into(), inputs: vec![cx], outputs: vec![cy],
+        claims: vec!["/m/a".into(), "/m/c".into()], ..Default::default() });
+    cmp.finish();
+    let links = vec![
+        Link { compiled: 0, source: 0, grade: Grade::Explicit, via: Via::Name },
+        Link { compiled: 0, source: 2, grade: Grade::Explicit, via: Via::Name },
+    ];
+    let s = Session::from_model(Model { source: src, compiled: Some(cmp), links, ..Default::default() });
+    let l = &s.links()[0][1];
+    assert_eq!(l.len(), 1);
+    assert_eq!((l[0].other, l[0].grade, l[0].via), (0, Grade::Inferred, Via::Structure));
+}
+
+#[test]
+fn reveal_opens_a_collapsed_stack() {
+    use afterpass_core::ir::Model;
+    let g = onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap();
+    let v = g.nodes.iter().position(|n| n.name == "/model/layers.1/fc/Add").unwrap() as u32;
+    let mut s = Session::from_model(Model { source: g, ..Default::default() });
+    let b = s.reveal(0, v, false);
+    assert!(b >= 0);
+    let p = s.pane(0);
+    assert_eq!(p.box_nodes(b as u32), [v]);
+    assert!(p.scene.titles.iter().any(|t| t.contains("unit 2/2")), "{:?}", p.scene.titles);
+}
+
+#[test]
+fn findings_cover_time_and_provenance() {
+    let s = Session::from_model(bundle::parse(&gunzip(&fixture("toy.tensorrt-gpu.afterpass.json.gz"))).unwrap());
+    let f = s.findings_json();
+    assert!(f.iter().any(|x| x["section"] == "time"));
+    for x in &f {
+        for t in x["targets"].as_array().unwrap() {
+            assert!(t[0].as_u64().unwrap() < 2);
+        }
+    }
+}
