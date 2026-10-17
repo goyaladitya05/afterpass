@@ -76,7 +76,7 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
             "attrs": {k: v for k, v in rt.items() if k not in RT_KEYS},
             "claims": claimed,
         })
-        links += linker.link(i, claimed, [])
+        links += linker.link(i, claimed)
 
     props = {}
     for key in ("INFERENCE_PRECISION_HINT", "EXECUTION_MODE_HINT", "NUM_STREAMS", "INFERENCE_NUM_THREADS", "PERFORMANCE_HINT"):

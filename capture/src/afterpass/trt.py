@@ -128,7 +128,7 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
             "attrs": {k: v for k, v in layer.items() if k not in LAYER_KEYS},
             "claims": claims,
         })
-        links += linker.link(i, claims, outputs)
+        links += linker.link(i, claims)
 
     ids = {n["name"]: n["id"] for n in nodes}
     medians = {name: statistics.median(v) for name, v in profiler.times.items()}

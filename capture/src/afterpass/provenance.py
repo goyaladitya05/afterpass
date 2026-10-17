@@ -1,7 +1,7 @@
 """Link compiled nodes to source nodes, grading every link.
 
 explicit: the runtime named the source node exactly.
-inferred: matched through a tensor name or a name prefix, or the name is ambiguous.
+inferred: the claimed name matches a tensor name or a name prefix, or several source nodes.
 unknown:  nothing matched; recorded as a link with source None.
 """
 
@@ -35,7 +35,7 @@ class Linker:
                 return [(self.producer[prefix], "inferred", "prefix")]
         return []
 
-    def link(self, compiled_id: int, claimed: list[str], out_tensors: list[str]) -> list[dict]:
+    def link(self, compiled_id: int, claimed: list[str]) -> list[dict]:
         best: dict[int, dict] = {}
 
         def add(sid, grade, via, claim):
@@ -46,10 +46,6 @@ class Linker:
         for name in claimed:
             for sid, grade, via in self._resolve(name):
                 add(sid, grade, via, name)
-        if not best:
-            for t in out_tensors:
-                if t in self.producer:
-                    add(self.producer[t], "inferred", "tensor", t)
         if not best:
             return [{"compiled": compiled_id, "source": None, "grade": "unknown"}]
         return list(best.values())
