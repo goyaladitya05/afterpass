@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>afterpass</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="mark">afterpass</span>
+      <nav class="crumbs" id="crumbs">/ no model</nav>
+      <span class="spacer"></span>
+      <label class="toggle"><input type="checkbox" id="overlay-time" /> <span>time</span></label>
+      <button class="btn" id="open"><span data-label="load">load</span></button>
+      <input type="file" id="file" multiple hidden accept=".onnx,.xml,.gz,.json" />
+    </header>
+    <main class="panes" id="panes">
+      <section class="pane" data-pane="0">
+        <div class="pane-head"><span class="num">001</span><span class="title">source</span><span class="meta"></span></div>
+        <canvas></canvas>
+      </section>
+      <section class="pane" data-pane="1">
+        <div class="pane-head"><span class="num">002</span><span class="title">compiled</span><span class="meta"></span></div>
+        <canvas></canvas>
+      </section>
+      <div class="empty" id="empty">
+        <pre class="ascii" aria-hidden="true"></pre>
+        <div class="empty-text">
+          <p class="label">001 / open</p>
+          <p>Drop an afterpass bundle, an ONNX model or an OpenVINO IR <code>.xml</code>.</p>
+          <p class="faint">Nothing is uploaded. Weights are never read.</p>
+        </div>
+      </div>
+      <div class="loading" id="loading" hidden><span class="label">parsing</span><span class="bar"></span></div>
+    </main>
+    <footer class="status"><span id="info"></span><span class="spacer"></span><span id="perf"></span></footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

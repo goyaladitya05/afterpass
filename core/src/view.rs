@@ -67,6 +67,7 @@ pub struct Scene {
 
 pub struct Pane {
     pub graph: Graph,
+    pub compiled: bool,
     pub hier: Hier,
     preds: Vec<Vec<u32>>,
     succs: Vec<Vec<u32>>,
@@ -85,12 +86,13 @@ fn clamp_w(chars: usize, min: f32, max: f32) -> f32 {
 }
 
 impl Pane {
-    pub fn new(graph: Graph, compiled: bool) -> Pane {
-        let hier = Hier::build(&graph, compiled);
+    pub fn new(graph: Graph, compiled: bool, flat: bool) -> Pane {
+        let hier = if flat { Hier::flat(&graph) } else { Hier::build(&graph, compiled) };
         let (preds, succs) = graph.adjacency();
         let n = graph.nodes.len();
         let mut p = Pane {
             graph,
+            compiled,
             hier,
             preds,
             succs,
@@ -169,6 +171,9 @@ impl Pane {
                     if let Some(cf) = self.child_frame(it) {
                         frames.push(cf);
                     } else if let Item::Group(g) = it {
+                        if self.hier.groups[g as usize].index.is_some() {
+                            continue; // repeat instances (often outliers) stay collapsed in the overview
+                        }
                         let size = self.hier.groups[g as usize].size;
                         if best.is_none_or(|(_, s)| size as usize > s) {
                             best = Some((g, size as usize));
@@ -197,12 +202,21 @@ impl Pane {
             Item::Group(g) => {
                 let gr = &h.groups[g as usize];
                 let sub = format!("{} ops", gr.size);
-                (gr.label.clone(), sub, clamp_w(gr.label.len().max(8), 90.0, 300.0), GROUP_H)
+                let title = match gr.index {
+                    // a repeat instance reads "layers.3", not "3"
+                    Some(_) => {
+                        let parent = &h.groups[gr.parent as usize].label;
+                        format!("{}.{}", parent.rsplit('/').next().unwrap_or(parent), gr.label)
+                    }
+                    None => gr.label.clone(),
+                };
+                let w = clamp_w(title.len().max(8), 90.0, 300.0);
+                (title, sub, w, GROUP_H)
             }
             Item::Stack(s) => {
                 let st = &h.stacks[s as usize];
                 let size = h.groups[st.instances[0] as usize].size;
-                let title = h.stack_label(s);
+                let title = format!("{}  \u{d7}{}", h.stack_label(s), st.count);
                 let sub = if st.period > 1 { format!("{} blocks per unit", st.period) } else { format!("{size} ops each") };
                 (title.clone(), sub, clamp_w(title.len() + 5, 120.0, 320.0), GROUP_H)
             }
@@ -327,7 +341,7 @@ impl Pane {
             let title = match (it, child) {
                 (Item::Stack(s), Some((Frame::Unit(_, k), _))) => {
                     let st = &self.hier.stacks[*s as usize];
-                    format!("{}  unit {}/{}  x{}", title, k + 1, st.count, st.count)
+                    format!("{}  unit {}/{}", title, k + 1, st.count)
                 }
                 _ => title,
             };
@@ -367,30 +381,37 @@ impl Pane {
         }
     }
 
-    /// Expand a collapsed group or stack, or collapse an expanded one. Returns whether anything changed.
-    pub fn toggle(&mut self, b: u32) -> bool {
-        let Some(&(item, frame)) = self.scene.refs.get(b as usize) else { return false };
+    fn find(&self, item: Item) -> i32 {
+        self.scene.refs.iter().position(|&(i, _)| i == item).map_or(-1, |b| b as i32)
+    }
+
+    /// Expand a collapsed group or stack, or collapse an expanded one.
+    /// Returns the item's box after the re-layout, or -1 if nothing changed.
+    pub fn toggle(&mut self, b: u32) -> i32 {
+        let Some(&(item, frame)) = self.scene.refs.get(b as usize) else { return -1 };
         if !matches!(item, Item::Group(_) | Item::Stack(_)) {
-            return false;
+            return -1;
         }
         if !self.expanded.remove(&item) {
             self.expanded.insert(item);
         }
         self.invalidate(frame);
         self.rebuild();
-        true
+        self.find(item)
     }
 
-    /// Show another unit of an expanded stack.
-    pub fn step(&mut self, b: u32, delta: i32) -> bool {
-        let Some(&(Item::Stack(s), frame)) = self.scene.refs.get(b as usize) else { return false };
+    /// Show another unit of an expanded stack. Returns the stack's box, or -1.
+    pub fn step(&mut self, b: u32, delta: i32) -> i32 {
+        let Some(&(item @ Item::Stack(s), frame)) = self.scene.refs.get(b as usize) else { return -1 };
+        if !self.expanded.contains(&item) {
+            return -1;
+        }
         let count = self.hier.stacks[s as usize].count as i32;
         let k = self.unit.get(&s).copied().unwrap_or(0) as i32;
-        let next = (k + delta).rem_euclid(count) as u32;
-        self.unit.insert(s, next);
+        self.unit.insert(s, (k + delta).rem_euclid(count) as u32);
         self.invalidate(frame);
         self.rebuild();
-        true
+        self.find(item)
     }
 
     /// Graph nodes shown by a box.

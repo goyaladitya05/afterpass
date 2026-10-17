@@ -83,3 +83,13 @@ fn session_links_both_ways() {
         assert!(sc.width > 0.0 && sc.height > 0.0);
     }
 }
+
+#[test]
+fn fused_kernels_land_in_their_majority_scope() {
+    use afterpass_core::hier::majority_scope;
+    let scopes = |v: &[&str]| v.iter().map(|s| scope_tokens(s)).collect::<Vec<_>>();
+    let cross = scopes(&["/m/layers.5/Add", "/m/layers.6/norm/Mul", "/m/layers.6/norm/Pow", "/m/layers.6/norm/Sqrt"]);
+    assert_eq!(majority_scope(cross), ["m", "layers", "6", "norm"]);
+    assert_eq!(majority_scope(scopes(&["/m/layers.5/Add", "/m/layers.6/Add"])), ["m", "layers"]);
+    assert_eq!(majority_scope(scopes(&["/m/layers.5/a/X", "/m/layers.5/b/Y"])), ["m", "layers", "5"]);
+}

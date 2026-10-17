@@ -48,12 +48,16 @@ pub struct Session {
 
 impl Session {
     pub fn from_model(m: Model) -> Session {
+        Session::build(m, false)
+    }
+
+    fn build(m: Model, flat: bool) -> Session {
         let mut s = Session { label: m.label, latency_us: m.latency_us, ..Default::default() };
         let ns = m.source.nodes.len();
-        s.panes.push(Pane::new(m.source, false));
+        s.panes.push(Pane::new(m.source, false, flat));
         if let Some(c) = m.compiled {
             let nc = c.nodes.len();
-            s.panes.push(Pane::new(c, true));
+            s.panes.push(Pane::new(c, true, flat));
             s.links = [vec![Vec::new(); ns], vec![Vec::new(); nc]];
             for l in m.links {
                 if l.source != NONE && (l.source as usize) < ns && (l.compiled as usize) < nc {
@@ -92,6 +96,15 @@ impl Session {
         Ok(Session::from_model(Model { source: g, ..Default::default() }))
     }
 
+    /// Rebuild every pane without collapsing (stress testing, graphs without hierarchical names).
+    pub fn flatten(&mut self) {
+        for p in &mut self.panes {
+            let graph = std::mem::take(&mut p.graph);
+            let compiled = p.compiled;
+            *p = Pane::new(graph, compiled, true);
+        }
+    }
+
     pub fn panes(&self) -> usize {
         self.panes.len()
     }
@@ -124,12 +137,21 @@ impl Session {
         o
     }
 
-    pub fn toggle(&mut self, pane: usize, b: u32) -> bool {
+    pub fn toggle(&mut self, pane: usize, b: u32) -> i32 {
         self.panes[pane].toggle(b)
     }
 
-    pub fn step(&mut self, pane: usize, b: u32, delta: i32) -> bool {
+    pub fn step(&mut self, pane: usize, b: u32, delta: i32) -> i32 {
         self.panes[pane].step(b, delta)
+    }
+
+    /// Show another session's source graph as this session's right pane, without provenance.
+    pub fn attach(&mut self, mut other: Session) {
+        self.panes.truncate(1);
+        self.links = Default::default();
+        if !other.panes.is_empty() {
+            self.panes.push(other.panes.swap_remove(0));
+        }
     }
 
     /// Boxes linked to box `b` of `pane` in the other pane, with the best grade per box (0 explicit, 1 inferred).

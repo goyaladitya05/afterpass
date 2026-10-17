@@ -76,6 +76,30 @@ pub fn scope_tokens(name: &str) -> Vec<String> {
     tokens
 }
 
+/// Scope of a fused kernel from the scopes of the source ops it claims: descend while one child scope holds at
+/// more than half of the claims. Equal to the common prefix when the claims agree; a kernel fusing one op of layer
+/// k with nine of layer k+1 lands in layer k+1 rather than at the `layers` level.
+pub fn majority_scope(mut claims: Vec<Vec<String>>) -> Vec<String> {
+    let mut scope = Vec::new();
+    loop {
+        let depth = scope.len();
+        let mut counts: Vec<(&String, usize)> = Vec::new();
+        for c in claims.iter().filter(|c| c.len() > depth) {
+            match counts.iter_mut().find(|(t, _)| *t == &c[depth]) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((&c[depth], 1)),
+            }
+        }
+        let Some(&(token, n)) = counts.iter().max_by_key(|(_, n)| *n) else { return scope };
+        if n != claims.len() && n * 2 <= claims.len() {
+            return scope;
+        }
+        let token = token.clone();
+        claims.retain(|c| c.len() > depth && c[depth] == token);
+        scope.push(token);
+    }
+}
+
 fn common_prefix(a: &[String], b: &[String]) -> usize {
     a.iter().zip(b).take_while(|(x, y)| x == y).count()
 }
@@ -87,6 +111,16 @@ fn h<T: Hash>(v: T) -> u64 {
 }
 
 impl Hier {
+    /// No collapsing: every visible node in the root group.
+    pub fn flat(g: &Graph) -> Hier {
+        let folded = g.constant_nodes();
+        let nodes: Vec<u32> = (0..g.nodes.len() as u32).filter(|&v| !folded[v as usize]).collect();
+        let node_group = (0..g.nodes.len()).map(|v| if folded[v] { NONE } else { 0 }).collect();
+        let size = nodes.len() as u32;
+        let root = Group { parent: NONE, stack: NONE, nodes, size, first: 0, ..Default::default() };
+        Hier { groups: vec![root], stacks: Vec::new(), node_group, folded }
+    }
+
     pub fn build(g: &Graph, compiled: bool) -> Hier {
         let n = g.nodes.len();
         let folded = g.constant_nodes();
@@ -95,11 +129,7 @@ impl Hier {
         // 1. scopes
         let mut scope: Vec<Vec<String>> = g.nodes.iter().map(|node| {
             if compiled {
-                let mut claims = node.claims.iter().map(|c| scope_tokens(c));
-                match claims.next() {
-                    Some(first) => claims.fold(first, |acc, t| acc[..common_prefix(&acc, &t)].to_vec()),
-                    None => Vec::new(),
-                }
+                majority_scope(node.claims.iter().map(|c| scope_tokens(c)).collect())
             } else {
                 scope_tokens(&node.name)
             }

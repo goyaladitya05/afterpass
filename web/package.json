@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "wasm": "wasm-pack build ../core --target web --out-dir ../web/pkg --release --no-pack",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
