@@ -1,7 +1,7 @@
 """Link compiled nodes to source nodes, grading every link.
 
 explicit: the runtime named the source node exactly.
-inferred: the claimed name matches a tensor name or a name prefix, or several source nodes.
+inferred: the claimed name matches a tensor name, a name prefix or a "<name>.<port>" form, or several source nodes.
 unknown:  nothing matched; recorded as a link with source None.
 """
 
@@ -26,6 +26,11 @@ class Linker:
             return [(i, grade, "name") for i in ids]
         if name in self.producer:
             return [(self.producer[name], "inferred", "tensor")]
+        base, dot, port = name.rpartition(".")
+        if dot and port.isdigit():  # OpenVINO GPU names an output port as "<op>.<port>"
+            found = self._resolve(base)
+            if found:
+                return [(i, "inferred", "port") for i, _, _ in found]
         prefix = name
         while "/" in prefix.strip("/"):
             prefix = prefix.rstrip("/").rsplit("/", 1)[0]

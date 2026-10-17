@@ -15,38 +15,21 @@ def _rt(op) -> dict:
     return {k: str(info[k].astype(str)) for k in info.keys()}
 
 
-def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker) -> dict:
-    core = ov.Core()
-    if device not in core.available_devices:
-        raise SystemExit(f"OpenVINO device {device} not available (have {core.available_devices})")
-    model = core.read_model(str(model_path))
-    if shapes:
-        model.reshape(shapes)
-    if any(p.get_partial_shape().is_dynamic for p in model.inputs):
-        raise SystemExit("model has dynamic input dims, pass --shape name=d0,d1,...")
-
-    t0 = time.perf_counter()
-    compiled = core.compile_model(model, device, {"PERF_COUNT": True, "PERFORMANCE_HINT": "LATENCY"})
-    compile_s = time.perf_counter() - t0
-
-    feeds = random_inputs([(p.get_any_name(), tuple(p.get_shape()), p.get_element_type().to_dtype()) for p in model.inputs])
-    req = compiled.create_infer_request()
-    for _ in range(warmup):
-        req.infer(feeds)
-    latencies, per_node = [], {}
-    for _ in range(iterations):
-        t = time.perf_counter()
-        req.infer(feeds)
-        latencies.append((time.perf_counter() - t) * 1e6)
-        for p in req.get_profiling_info():
-            if p.status == p.Status.EXECUTED:
-                per_node.setdefault(p.node_name, []).append(p.real_time.total_seconds() * 1e6)
-
-    # The runtime model is a snapshot: execTimeMcs is only filled if taken after an inference.
-    rt_model = compiled.get_runtime_model()
+def _graph(rt_model, entries, linker):
+    """Walk the runtime model. Kept in its own function so every reference into the runtime model is
+    released before the compiled model; releasing them after it crashes OpenVINO on Windows."""
     ops = rt_model.get_ordered_ops()
-    ids = {op.get_friendly_name(): i for i, op in enumerate(ops)}
     nodes, tensors, links = [], {}, []
+    if any(len(op.get_rt_info()) for op in ops):
+        ids = {op.get_friendly_name(): i for i, op in enumerate(ops)}
+    else:
+        # NPU returns a placeholder runtime model without rt_info: the only per layer record is profiling info.
+        ids = {p.node_name: i for i, p in enumerate(entries)}
+        for i, p in enumerate(entries):
+            nodes.append({"id": i, "name": p.node_name, "op": p.node_type, "kernel": p.exec_type, "order": i,
+                          "inputs": [], "outputs": [], "attrs": {}, "claims": [p.node_name]})
+            links += linker.link(i, [p.node_name])
+        ops = []
     for i, op in enumerate(ops):
         rt = _rt(op)
         precisions = rt.get("outputPrecisions", "").split(",")
@@ -77,6 +60,47 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
             "claims": claimed,
         })
         links += linker.link(i, claimed)
+    return nodes, tensors, links, ids, bool(ops)
+
+
+def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker) -> dict:
+    core = ov.Core()
+    if device not in core.available_devices:
+        raise SystemExit(f"OpenVINO device {device} not available (have {core.available_devices})")
+    model = core.read_model(str(model_path))
+    if shapes:
+        model.reshape(shapes)
+    if any(p.get_partial_shape().is_dynamic for p in model.inputs):
+        raise SystemExit("model has dynamic input dims, pass --shape name=d0,d1,...")
+
+    t0 = time.perf_counter()
+    compiled = core.compile_model(model, device, {"PERF_COUNT": True, "PERFORMANCE_HINT": "LATENCY"})
+    compile_s = time.perf_counter() - t0
+
+    feeds = random_inputs([(p.get_any_name(), tuple(p.get_shape()), p.get_element_type().to_dtype()) for p in model.inputs])
+    req = compiled.create_infer_request()
+    for _ in range(warmup):
+        req.infer(feeds)
+    latencies, per_node = [], {}
+    for _ in range(iterations):
+        t = time.perf_counter()
+        req.infer(feeds)
+        latencies.append((time.perf_counter() - t) * 1e6)
+        entries = req.get_profiling_info()
+        for p in entries:
+            if p.status == p.Status.EXECUTED:
+                per_node.setdefault(p.node_name, []).append(p.real_time.total_seconds() * 1e6)
+
+    # The runtime model is a snapshot: execTimeMcs is only filled if taken after an inference.
+    nodes, tensors, links, ids, topology = _graph(compiled.get_runtime_model(), entries, linker)
+    # GPU sometimes names a profiling entry after the node's claim instead of the node; map it when unambiguous.
+    by_claim: dict[str, list[int]] = {}
+    for n in nodes:
+        for c in n["claims"]:
+            by_claim.setdefault(c, []).append(n["id"])
+    for name in list(per_node):
+        if name not in ids and len(by_claim.get(name, [])) == 1 and nodes[by_claim[name][0]]["name"] not in per_node:
+            ids[name] = by_claim[name][0]
 
     props = {}
     for key in ("INFERENCE_PRECISION_HINT", "EXECUTION_MODE_HINT", "NUM_STREAMS", "INFERENCE_NUM_THREADS", "PERFORMANCE_HINT"):
@@ -89,11 +113,12 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     return {
         "compiled": {"runtime": "openvino", "version": ov.get_version(), "device": device,
                      "device_name": core.get_property(device, "FULL_DEVICE_NAME"),
-                     "properties": props, "nodes": nodes, "tensors": tensors},
+                     "properties": props, "topology": topology, "nodes": nodes, "tensors": tensors},
         "profile": {
             "unit": "us", "iterations": iterations, "warmup": warmup, "source": "get_profiling_info, median per node",
             "latency": stats(latencies),
             "nodes": {str(ids[name]): statistics.median(v) for name, v in per_node.items() if name in ids},
+            "unmatched": {name: statistics.median(v) for name, v in per_node.items() if name not in ids},
         },
         "links": links,
         "compile_s": compile_s,

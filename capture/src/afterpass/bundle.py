@@ -5,8 +5,8 @@ import gzip
 import json
 import os
 import platform
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import onnx
@@ -18,6 +18,11 @@ SCHEMA_VERSION = 0
 
 def _cpu() -> dict:
     info = {"name": platform.processor(), "flags": [], "cores": os.cpu_count()}
+    if sys.platform == "win32":
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as k:
+            info["name"] = winreg.QueryValueEx(k, "ProcessorNameString")[0].strip()
+        return info  # no ISA flag list on Windows without extra dependencies
     try:
         for line in Path("/proc/cpuinfo").read_text().splitlines():
             key, _, value = line.partition(":")
@@ -32,6 +37,20 @@ def _cpu() -> dict:
     return info
 
 
+def _ram() -> int:
+    if sys.platform == "win32":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [(f, ctypes.c_ulonglong) for f in (
+                "total", "avail", "total_page", "avail_page", "total_virtual", "avail_virtual", "avail_ext")]
+
+        m = MemoryStatus(length=ctypes.sizeof(MemoryStatus))
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+        return m.total
+    return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+
+
 def _os() -> str:
     try:
         for line in Path("/etc/os-release").read_text().splitlines():
@@ -42,20 +61,30 @@ def _os() -> str:
     return platform.platform()
 
 
+def _run(cmd: list[str]) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
 def _gpus() -> list[dict]:
-    if not shutil.which("nvidia-smi"):
-        return []
-    out = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader"],
-                         capture_output=True, text=True).stdout
+    if sys.platform == "win32":
+        out = _run(["powershell", "-NoProfile", "-Command",
+                    "Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion | ConvertTo-Json"])
+        rows = json.loads(out) if out.strip() else []
+        return [{"name": r["Name"], "driver": r["DriverVersion"]} for r in (rows if isinstance(rows, list) else [rows])]
+    out = _run(["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader"])
     return [dict(zip(("name", "driver", "memory"), (f.strip() for f in line.split(",")))) for line in out.splitlines() if line]
 
 
 def environment() -> dict:
     return {
         "os": _os(),
-        "kernel": platform.release(),
+        "kernel": platform.version() if sys.platform == "win32" else platform.release(),
         "cpu": _cpu(),
-        "ram_bytes": os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"),
+        "ram_bytes": _ram(),
         "gpus": _gpus(),
         "python": platform.python_version(),
         "onnx": onnx.__version__,

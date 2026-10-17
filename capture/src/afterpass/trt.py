@@ -137,6 +137,7 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
         "compiled": {"runtime": "tensorrt", "version": trt.__version__, "device": device,
                      "device_name": props.name.decode().rstrip("\x00"),
                      "properties": {k: v for k, v in info.items() if k != "Layers"},
+                     "topology": True,
                      "nodes": nodes, "tensors": tensors},
         "profile": {
             "unit": "us", "iterations": iterations, "warmup": warmup, "source": "IProfiler, median per layer",

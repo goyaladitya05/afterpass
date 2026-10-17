@@ -8,21 +8,24 @@ from pathlib import Path
 
 from afterpass import bundle
 
+IO = ("Input", "Output", "Parameter", "Result")  # OpenVINO CPU says Input/Output; GPU and NPU say Parameter/Result
 
-def kernels(nodes: list) -> set:
-    """Compiled nodes on the data path: not inputs or outputs, and not computed from constants only."""
+
+def kernels(nodes: list, topology: bool) -> set:
+    """Compiled nodes on the data path: not inputs or outputs, and not computed from constants only.
+    Without topology (OpenVINO NPU) every non-IO node counts."""
     producer = {t: n["id"] for n in nodes for t in n["outputs"]}
     const = set()
     for n in sorted(nodes, key=lambda n: n["id"]):  # ids are in topological order for both runtimes
         srcs = [producer.get(t) for t in n["inputs"] if t]
-        if n["op"] == "Const" or (n["op"] != "Input" and all(s in const for s in srcs)):
+        if n["op"] == "Const" or (topology and n["op"] not in IO and all(s in const for s in srcs)):
             const.add(n["id"])
-    return {n["id"] for n in nodes if n["op"] not in ("Input", "Output") and n["id"] not in const}
+    return {n["id"] for n in nodes if n["op"] not in IO and n["id"] not in const}
 
 
 def row(path: Path) -> list:
     b = bundle.read(path)
-    kernels_ = kernels(b["compiled"]["nodes"])
+    kernels_ = kernels(b["compiled"]["nodes"], b["compiled"].get("topology", True))
     best = {}
     for link in b["provenance"]:
         if link["compiled"] in kernels_:
