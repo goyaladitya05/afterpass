@@ -91,3 +91,15 @@ fn synthetic_moe() {
     let s = Session::from_model(Model { source: g, ..Default::default() });
     report("synthetic/moe-48x128.onnx", t0, &s);
 }
+
+#[test]
+fn bundles_30b() {
+    let Some(d) = corpus("bundles-30b") else { return };
+    for f in std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()) {
+        let t0 = Instant::now();
+        let mut json = Vec::new();
+        flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
+        let s = Session::from_model(bundle::parse(&json).unwrap());
+        report(f.file_name().unwrap().to_str().unwrap(), t0, &s);
+    }
+}

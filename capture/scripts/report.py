@@ -18,7 +18,7 @@ def kernels(nodes: list, topology: bool) -> set:
     const = set()
     for n in sorted(nodes, key=lambda n: n["id"]):  # ids are in topological order for both runtimes
         srcs = [producer.get(t) for t in n["inputs"] if t]
-        if n["op"] == "Const" or (topology and n["op"] not in IO and all(s in const for s in srcs)):
+        if n["op"] in ("Const", "Constant") or (topology and n["op"] not in IO and all(s in const for s in srcs)):
             const.add(n["id"])
     return {n["id"] for n in nodes if n["op"] not in IO and n["id"] not in const}
 
@@ -39,7 +39,8 @@ def row(path: Path) -> list:
             best[link["compiled"]] = min(best.get(link["compiled"], 2), rank)
     share = lambda r: 100.0 * sum(1 for v in best.values() if v == r) / max(len(kernels_), 1)
     linked = {l["source"] for l in b["provenance"] if l["source"] is not None}
-    src = [n for n in b["source"]["nodes"] if n["op"] != "Constant"]
+    src_path = kernels(b["source"]["nodes"], True)  # source ops on the data path (constant-only subgraphs excluded)
+    src = [n for n in b["source"]["nodes"] if n["id"] in src_path]
     cap = b["capture"]
     return [
         cap["model"], f"{cap['runtime']} {cap['device']}", short(b["compiled"]["device_name"]), len(b["source"]["nodes"]), len(b["compiled"]["nodes"]),

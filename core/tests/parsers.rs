@@ -58,6 +58,8 @@ fn scopes() {
     assert_eq!(scope_tokens("__module.model.layers.17.mlp/aten::view/Reshape"), ["model", "layers", "17", "mlp"]);
     assert_eq!(scope_tokens("/model.0/conv/Conv + /model.0/act/Mul"), ["model", "0", "conv"]);
     assert!(scope_tokens("Constant_12").is_empty());
+    assert!(scope_tokens("ReduceSum_7265191_Reshape/MOECompressed").is_empty());
+    assert_eq!(scope_tokens("/model/layers.0/Add_1"), ["model", "layers", "0"]);
 }
 
 #[test]
@@ -92,6 +94,8 @@ fn fused_kernels_land_in_their_majority_scope() {
     assert_eq!(majority_scope(cross), ["m", "layers", "6", "norm"]);
     assert_eq!(majority_scope(scopes(&["/m/layers.5/Add", "/m/layers.6/Add"])), ["m", "layers"]);
     assert_eq!(majority_scope(scopes(&["/m/layers.5/a/X", "/m/layers.5/b/Y"])), ["m", "layers", "5"]);
+    // internal transformation names carry no scope and do not dilute the vote
+    assert_eq!(majority_scope(scopes(&["Convert_1", "Reshape_2", "Add_3", "/m/layers.7/mlp/Mul"])), ["m", "layers", "7", "mlp"]);
 }
 
 #[test]
