@@ -112,6 +112,22 @@ pub fn majority_scope(mut claims: Vec<Vec<String>>) -> Vec<String> {
     }
 }
 
+/// Digit runs replaced by `#` inside identifiers (`layers.5.mlp` gives `layers.#.mlp`); plain numbers are kept.
+pub fn mask_digits(v: &str) -> String {
+    if !v.chars().any(|c| c.is_alphabetic()) {
+        return v.to_string();
+    }
+    let mut out = String::with_capacity(v.len());
+    for c in v.chars() {
+        if !c.is_ascii_digit() {
+            out.push(c);
+        } else if !out.ends_with('#') {
+            out.push('#');
+        }
+    }
+    out
+}
+
 fn common_prefix(a: &[String], b: &[String]) -> usize {
     a.iter().zip(b).take_while(|(x, y)| x == y).count()
 }
@@ -278,26 +294,12 @@ impl Hier {
     /// attributes with digits masked inside identifiers (`past_key_values.5.key`). Compiled graphs hash op
     /// types only: their attributes and tactics vary per layer by timing noise.
     fn hash(&mut self, g: &Graph, preds: &[Vec<u32>], succs: &[Vec<u32>], compiled: bool) {
-        let mask = |v: &str| -> String {
-            if !v.chars().any(|c| c.is_alphabetic()) {
-                return v.to_string();
-            }
-            let mut out = String::with_capacity(v.len());
-            for c in v.chars() {
-                if !c.is_ascii_digit() {
-                    out.push(c);
-                } else if !out.ends_with('#') {
-                    out.push('#');
-                }
-            }
-            out
-        };
         let base: Vec<u64> = g.nodes.iter().map(|node| {
             let weights: Vec<&Option<Vec<i64>>> = node.inputs.iter().filter(|&&t| t != NONE).map(|&t| &g.tensors[t as usize])
                 .filter(|t| t.constant || (t.producer != NONE && self.folded[t.producer as usize]))
                 .map(|t| &t.shape).collect();
             let attrs: Vec<(&String, String)> = if compiled { Vec::new() } else {
-                node.attrs.iter().filter(|(k, _)| k != "offset" && k != "size").map(|(k, v)| (k, mask(v))).collect()
+                node.attrs.iter().filter(|(k, _)| k != "offset" && k != "size").map(|(k, v)| (k, mask_digits(v))).collect()
             };
             h((&node.op, weights, attrs, node.inputs.len()))
         }).collect();

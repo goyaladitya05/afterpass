@@ -1,6 +1,6 @@
 import { asciiTexture, loader, scramble, ticker } from "./chrome";
 import { buildAtlas } from "./glyphs";
-import { Kind, Renderer, type RGBA, type Scene, type Style, type Theme } from "./gl";
+import { Kind, Renderer, type RGBA, type Scene, sceneMaxTime, type Style, type Theme } from "./gl";
 import { type Finding, h, renderFindings, renderInspector, us } from "./panels";
 import type { Request } from "./worker";
 
@@ -56,7 +56,7 @@ let theme: Theme = {};
 let panes: { el: HTMLElement; r: Renderer; style: Style; legend: HTMLElement; legendNames: string[] }[] = [];
 let paneCount = 0;
 let paneNames: string[] = [];
-let latency = NaN;
+let latencies: number[] = [];
 let selection: { pane: number; box: number } | null = null;
 
 function boxRect(s: Scene, b: number) {
@@ -79,6 +79,16 @@ async function applyOverlay() {
     const names: string[] = cat && res[i]?.legend ? res[i].legend.split("\n") : [];
     p.legendNames = names;
     p.style.palette = names.map((_, k) => theme[mode === "precision" ? PRECISION_CATS[k] : CATS[Math.min(k, CATS.length - 1)]]);
+  });
+  syncTimeScale();
+}
+
+/** Compared compiled panes share one time ramp, so the same colour means the same time on both sides. */
+function syncTimeScale() {
+  const compiled = paneCount === 3 ? [1, 2] : [];
+  const max = Math.max(0, ...compiled.map((p) => (panes[p].r.scene ? sceneMaxTime(panes[p].r.scene!) : 0)));
+  panes.slice(0, paneCount).forEach((p, i) => {
+    p.style.timeMax = compiled.includes(i) ? max : undefined;
     renderLegend(i);
     restyle(i);
   });
@@ -88,8 +98,7 @@ function renderLegend(i: number) {
   const { legend, style, legendNames, r } = panes[i];
   legend.replaceChildren();
   if (style.overlay === "time") {
-    const s = r.scene;
-    const max = s ? Math.max(0, ...[...s.times].filter((t, b) => s.kinds[b] !== Kind.Frame && t > 0)) : 0;
+    const max = style.timeMax ?? (r.scene ? sceneMaxTime(r.scene) : 0);
     if (!max) return;
     const ramp = ["time-0", "time-1", "time-2", "time-3", "time-4", "time-5"].map((k) => css(theme[k])).join(",");
     legend.append(h("li", {}, h("i", { class: "ramp", style: `background: linear-gradient(90deg, ${ramp})` }), `0 to ${us(max)}`));
@@ -114,10 +123,11 @@ async function select(p: number, box: number, opts: { center?: boolean } = {}) {
   if (box >= 0) {
     const [linked, insp] = await Promise.all([rpc({ op: "select", pane: p, box }), rpc({ op: "inspect", pane: p, box })]);
     info.textContent = linked.text;
-    if (paneCount > 1) {
-      linked.boxes.forEach((b: number, i: number) => panes[1 - p].style.linked.set(b, linked.grades[i]));
-      revealLinked(1 - p, linked.boxes);
-    }
+    linked.linked.forEach((l: { boxes: Uint32Array; grades: Uint8Array }, q: number) => {
+      if (q === p || !l.boxes.length) return;
+      l.boxes.forEach((b, i) => panes[q].style.linked.set(b, l.grades[i]));
+      revealLinked(q, l.boxes);
+    });
     const title = panes[p].r.scene!.labels.split("\n")[box]?.split("\t")[0] ?? "";
     renderInspector($("#inspect-main"), $("#inspect-links"), $("#inspector-meta"), insp, paneNames, title, follow);
     if (opts.center) centerOn(p, box);
@@ -153,7 +163,7 @@ function revealLinked(p: number, boxes: Uint32Array) {
 async function afterSceneChange(p: number, scene: Scene, wasmBytes: number) {
   panes[p].r.scene = scene;
   if (overlaySel.value !== "none" && overlaySel.value !== "time") await applyOverlay();
-  else renderLegend(p);
+  else syncTimeScale();
   report(wasmBytes);
 }
 
@@ -203,7 +213,7 @@ searchInput.addEventListener("input", () => {
     }
     const hits: { pane: number; node: number; name: string; op: string }[] = await rpc({ op: "search", query: q });
     for (const hit of hits) {
-      const li = h("li", {}, h("span", { class: "tag" }, hit.pane === 0 ? "src" : "cmp"), h("span", {}, hit.op), h("span", {}, hit.name));
+      const li = h("li", {}, h("span", { class: "tag" }, hit.pane === 0 ? "src" : paneCount === 3 ? paneNames[hit.pane] : "cmp"), h("span", {}, hit.op), h("span", {}, hit.name));
       li.addEventListener("click", () => {
         results.hidden = true;
         reveal(hit.pane, hit.node);
@@ -291,6 +301,9 @@ function report(wasmBytes: number) {
   perf.textContent = `${perf.dataset.load ?? ""}  wasm ${mb(wasmBytes)}${heap ? `  js ${mb(heap)}` : ""}`;
 }
 
+/** "openvino 2026.4.1 GPU Intel(R) Arc(TM) 140V" gives "openvino 2026.4.1 GPU" (the pane heads carry the rest). */
+const short = (label: string) => label.split(" ").slice(0, 3).join(" ");
+
 function showLanding(show: boolean) {
   landing.hidden = !show;
   if (show) $<HTMLElement>("#crumbs").textContent = "/ start";
@@ -305,11 +318,13 @@ async function load(files: File[]) {
     const res = await rpc({ op: "load", files, flat: params.has("flat") });
     const tParsed = performance.now();
     paneCount = res.scenes.length;
-    latency = res.latency;
-    paneNames = paneCount > 1 ? (res.label ? ["source", "compiled"] : ["graph a", "graph b"]) : ["source"];
+    latencies = res.latencies;
+    const labels: string[] = res.labels;
+    paneNames = paneCount === 3 ? ["source", "A", "B"] : paneCount === 2 ? (labels[1] ? ["source", "compiled"] : ["graph a", "graph b"]) : ["source"];
     panesEl.classList.toggle("single", paneCount < 2);
+    panesEl.classList.toggle("triple", paneCount === 3);
     const names = files.map((f) => f.name).join(" + ");
-    $<HTMLElement>("#crumbs").textContent = `/ ${names}${res.label ? " / " + res.label : ""}`;
+    $<HTMLElement>("#crumbs").textContent = paneCount === 3 ? `/ compare / A ${short(labels[1])} / B ${short(labels[2])}` : `/ ${names}${labels[1] ? " / " + labels[1] : ""}`;
     selection = null;
     panes.forEach(({ el, r, style }, p) => {
       style.selected = -1;
@@ -317,11 +332,12 @@ async function load(files: File[]) {
       r.resize();
       r.scene = res.scenes[p] ?? null;
       r.fit();
-      const lat = p === 1 && latency === latency ? `  latency ${us(latency)}` : "";
-      el.querySelector(".meta")!.textContent = res.nodes[p] !== undefined ? `${res.nodes[p]} nodes${lat}` : "";
+      const lat = latencies[p] === latencies[p] && latencies[p] !== undefined ? `  latency ${us(latencies[p])}` : "";
+      const label = paneCount === 3 && labels[p] ? `${labels[p]}  ` : "";
+      el.querySelector(".meta")!.textContent = res.nodes[p] !== undefined ? `${label}${res.nodes[p]} nodes${lat}` : "";
       el.querySelector(".title")!.textContent = paneNames[p] ?? "";
     });
-    overlaySel.value = paneCount > 1 && latency === latency ? "time" : "none";
+    overlaySel.value = latencies.some((l) => l === l) ? "time" : "none";
     await applyOverlay();
     $("#inspect-main").replaceChildren(h("p", { class: "hint" }, "Select a node. Double-click a block to open it; [ and ] step through a stack."));
     $("#inspect-links").replaceChildren();

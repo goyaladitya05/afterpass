@@ -45,14 +45,19 @@
           <canvas></canvas>
           <ul class="legend"></ul>
         </section>
+        <section class="pane" data-pane="2">
+          <div class="pane-head"><span class="num">003</span><span class="title">compiled</span><span class="meta"></span></div>
+          <canvas></canvas>
+          <ul class="legend"></ul>
+        </section>
         <div class="loading" id="loading" hidden><span class="label">parsing</span><span class="bar"></span></div>
       </div>
       <aside class="findings" id="findings">
-        <div class="panel-head"><span class="num">003</span><span class="title">findings</span></div>
+        <div class="panel-head"><span class="num">004</span><span class="title">findings</span></div>
         <div class="findings-body" id="findings-body"></div>
       </aside>
       <section class="inspector" id="inspector">
-        <div class="panel-head"><span class="num">004</span><span class="title">inspector</span><span class="meta" id="inspector-meta"></span></div>
+        <div class="panel-head"><span class="num">005</span><span class="title">inspector</span><span class="meta" id="inspector-meta"></span></div>
         <div class="inspector-body">
           <div class="inspect-main" id="inspect-main"><p class="hint">Select a node. Double-click a block to open it; <kbd>[</kbd> <kbd>]</kbd> step through a stack.</p></div>
           <div class="inspect-links" id="inspect-links"></div>
@@ -72,7 +77,7 @@
         </div>
         <ol class="steps">
           <li><span class="num">001</span><b>capture</b><span>Compile with OpenVINO or TensorRT and profile it: <code>afterpass capture model.onnx --runtime tensorrt --device GPU</code></span></li>
-          <li><span class="num">002</span><b>open</b><span>Load the bundle here, or an ONNX model or OpenVINO IR on its own. 30B-class graphs open in under a second.</span></li>
+          <li><span class="num">002</span><b>open</b><span>Load a bundle here, or an ONNX model or OpenVINO IR on its own. Load two bundles of one model to compare runtimes, devices or versions.</span></li>
           <li><span class="num">003</span><b>trace</b><span>Click a kernel to see its source ops. Findings list time sinks, unaccounted ops, inserted reorders and precision fallbacks.</span></li>
         </ol>
         <div class="demos" id="demos" hidden><p class="label">demos</p><ul></ul></div>

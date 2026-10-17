@@ -19,6 +19,8 @@ export const enum Kind { Node = 0, Group = 1, Stack = 2, Frame = 3, Port = 4 }
 export type RGBA = [number, number, number, number];
 export type Theme = Record<string, RGBA>;
 
+export const sceneMaxTime = (scene: Scene) => scene.times.reduce((m, v, i) => (scene.kinds[i] !== Kind.Frame && v > m ? v : m), 0);
+
 export interface Style {
   selected: number;
   /** linked box -> best provenance grade (0 explicit, 1 inferred) */
@@ -27,6 +29,8 @@ export interface Style {
   overlay: string;
   cats?: Uint16Array;
   palette?: RGBA[];
+  /** top of the time ramp, shared by compiled panes being compared; the scene's own maximum otherwise */
+  timeMax?: number;
 }
 
 const BOX_VS = `#version 300 es
@@ -239,7 +243,7 @@ export class Renderer {
       return;
     }
     const t = this.theme, n = scene.kinds.length;
-    const maxTime = scene.times.reduce((m, v, i) => (scene.kinds[i] !== Kind.Frame && v > m ? v : m), 0);
+    const maxTime = style.timeMax ?? sceneMaxTime(scene);
     const ramp = [t["time-0"], t["time-1"], t["time-2"], t["time-3"], t["time-4"], t["time-5"]];
     const heat = (v: number): RGBA | null => {
       if (style.overlay !== "time" || !(v > 0) || maxTime <= 0) return null;

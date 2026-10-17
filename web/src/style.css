@@ -8,6 +8,7 @@ html, body { margin: 0; height: 100%; }
 body {
   display: grid;
   grid-template-rows: var(--topbar-h) 1fr auto;
+  grid-template-columns: minmax(0, 1fr);
   background: var(--bg);
   color: var(--text);
   font: var(--fw-regular) var(--fs-sm) / var(--lh-snug) var(--font-sans);
@@ -38,9 +39,9 @@ kbd { border: var(--border); padding: 0 var(--space-1); }
   background: var(--bg-panel);
   position: relative; z-index: 5;
 }
-.mark { font: var(--fw-bold) var(--fs-base) var(--font-mono); letter-spacing: -0.02em; background: none; border: 0; padding: 0; cursor: pointer; }
+.mark { flex: none; white-space: nowrap; font: var(--fw-bold) var(--fs-base) var(--font-mono); letter-spacing: -0.02em; background: none; border: 0; padding: 0; cursor: pointer; }
 .mark::before { content: "> "; color: var(--accent-text); }
-.crumbs { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.crumbs { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .field { display: flex; align-items: center; gap: var(--space-2); }
 select, input[type="search"] {
   font: var(--fs-sm) var(--font-mono);
@@ -91,9 +92,14 @@ select, input[type="search"] {
 }
 .panes { grid-area: panes; position: relative; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
 .panes.single { grid-template-columns: 1fr; }
-.panes.single .pane[data-pane="1"] { display: none; }
+.panes:not(.triple) .pane[data-pane="2"], .panes.single .pane[data-pane="1"] { display: none; }
+/* comparing: A | source | B */
+.panes.triple { grid-template-columns: 1fr 1fr 1fr; }
+.panes.triple .pane[data-pane="1"] { order: -1; }
 .pane { position: relative; min-width: 0; min-height: 0; border-right: var(--border); background: var(--bg-canvas); }
-.pane:last-of-type { border-right: 0; }
+.panes:not(.triple) .pane[data-pane="1"], .panes.triple .pane[data-pane="2"] { border-right: 0; }
+.panes.triple .pane-head { flex-wrap: wrap; row-gap: 0; }
+.panes.triple .pane-head .meta { flex-basis: 100%; margin-left: 0; }
 .pane canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
 .pane-head {
   position: absolute; top: 0; left: 0; right: 0; z-index: 1;
@@ -203,6 +209,7 @@ body.drag .landing .landing-inner { outline: 1px dashed var(--accent); outline-o
 }
 @media (max-width: 48rem) {
   .panes { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+  .panes.triple { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr 1fr; }
   .pane { border-right: 0; border-bottom: var(--border); }
   .crumbs, .field .label { display: none; }
   .search input { width: 8rem; }

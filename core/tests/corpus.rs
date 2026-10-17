@@ -116,7 +116,7 @@ fn structural_coverage() {
             let s = Session::from_model(bundle::parse(&json).unwrap());
             let src = s.pane(0);
             let path: Vec<usize> = (0..src.graph.nodes.len()).filter(|&v| afterpass_core::analysis::data_path(src, v)).collect();
-            let by = |structure: bool| path.iter().filter(|&&v| s.links()[0][v].iter().any(|l| structure || l.via != afterpass_core::ir::Via::Structure)).count();
+            let by = |structure: bool| path.iter().filter(|&&v| s.links()[0][0][v].iter().any(|l| structure || l.via != afterpass_core::ir::Via::Structure)).count();
             let findings = s.findings_json();
             let mut sections = std::collections::BTreeMap::new();
             for x in &findings {
@@ -125,6 +125,32 @@ fn structural_coverage() {
             println!("{}: source covered {:.1}% by name, {:.1}% with structure; findings {:?}",
                 f.file_name().unwrap().to_str().unwrap(), 100.0 * by(false) as f64 / path.len() as f64,
                 100.0 * by(true) as f64 / path.len() as f64, sections);
+        }
+    }
+}
+
+#[test]
+fn compare_pairs() {
+    let pairs = [
+        ("bundles-lnl/tinyllama-1.1b.openvino-cpu", "bundles-lnl/tinyllama-1.1b.openvino-gpu"),
+        ("bundles/tinyllama-1.1b.tensorrt-gpu", "bundles-lnl/tinyllama-1.1b.openvino-gpu"),
+        ("bundles-ov2025/tinyllama-1.1b.openvino-cpu", "bundles-ov2026/tinyllama-1.1b.openvino-cpu"),
+        ("bundles/yolo11n.tensorrt-gpu", "bundles-lnl/yolo11n.openvino-gpu"),
+    ];
+    let load = |f: &str| {
+        let mut json = Vec::new();
+        let path = format!("{}/../corpus/{f}.afterpass.json.gz", env!("CARGO_MANIFEST_DIR"));
+        flate2::read::GzDecoder::new(std::fs::File::open(path).ok()?).read_to_end(&mut json).unwrap();
+        Some(Session::from_model(bundle::parse(&json).unwrap()))
+    };
+    for (a, b) in pairs {
+        let (Some(mut s), Some(other)) = (load(a), load(b)) else { continue };
+        let t0 = std::time::Instant::now();
+        s.add_compiled(other).unwrap();
+        let f = s.findings_json();
+        println!("== {a} vs {b}: findings in {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
+        for x in f.iter().filter(|x| !["time", "inserted", "precision", "unaccounted", "outliers"].contains(&x["section"].as_str().unwrap())) {
+            println!("  [{}] {} | {} | {} targets", x["section"].as_str().unwrap(), x["title"].as_str().unwrap(), x["detail"].as_str().unwrap(), x["targets"].as_array().unwrap().len());
         }
     }
 }

@@ -136,7 +136,7 @@ fn structure_recovers_ops_whose_names_were_lost() {
         Link { compiled: 0, source: 2, grade: Grade::Explicit, via: Via::Name },
     ];
     let s = Session::from_model(Model { source: src, compiled: Some(cmp), links, ..Default::default() });
-    let l = &s.links()[0][1];
+    let l = &s.links()[0][0][1];
     assert_eq!(l.len(), 1);
     assert_eq!((l[0].other, l[0].grade, l[0].via), (0, Grade::Inferred, Via::Structure));
 }
@@ -164,4 +164,25 @@ fn findings_cover_time_and_provenance() {
             assert!(t[0].as_u64().unwrap() < 2);
         }
     }
+}
+
+#[test]
+fn two_runtimes_compare_through_the_source() {
+    let load = |f: &str| Session::from_model(bundle::parse(&gunzip(&fixture(f))).unwrap());
+    let mut s = load("toy.openvino-cpu.afterpass.json.gz");
+    s.add_compiled(load("toy.tensorrt-gpu.afterpass.json.gz")).unwrap();
+    assert_eq!(s.links().len(), 2);
+    // every linked kernel of A reaches kernels of B through the source ops they share
+    let a = s.pane(1);
+    let k = (0..a.graph.nodes.len() as u32).find(|&k| !s.links()[0][1][k as usize].is_empty() && afterpass_core::analysis::data_path(a, k as usize)).unwrap();
+    assert!(!afterpass_core::analysis::linked_nodes(s.links(), 1, &[k], 2).is_empty());
+    let f = s.findings_json();
+    let sections: Vec<&str> = f.iter().map(|x| x["section"].as_str().unwrap()).collect();
+    assert_eq!(sections[0], "summary");
+    assert!(sections.contains(&"delta"));
+    assert!(f.iter().any(|x| x["title"].as_str().unwrap().starts_with("B  ")));
+    // a capture of another source is refused
+    let mut other = load("toy.openvino-cpu.afterpass.json.gz");
+    let onnx_only = Session::from_model(afterpass_core::ir::Model { source: onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap(), ..Default::default() });
+    assert!(other.add_compiled(onnx_only).is_err());
 }

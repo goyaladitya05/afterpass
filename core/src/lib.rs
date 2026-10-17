@@ -12,7 +12,7 @@ pub mod view;
 use js_sys::{Float32Array, Function, Object, Reflect, Uint16Array, Uint32Array, Uint8Array};
 use wasm_bindgen::prelude::*;
 
-use analysis::{LinkRef, Links, Overlay};
+use analysis::{LinkRef, Links, Overlay, Side};
 use ir::{Grade, Model, NONE};
 use view::Pane;
 
@@ -41,14 +41,11 @@ fn set(o: &Object, k: &str, v: impl Into<JsValue>) {
 #[wasm_bindgen]
 #[derive(Default)]
 pub struct Session {
+    /// Pane 0 is the source; panes 1 and 2 are compiled graphs of it.
     panes: Vec<Pane>,
-    links: Links,
-    /// Source ops linked by structure rather than by name.
-    inferred: usize,
-    label: String,
-    runtime: String,
-    device: String,
-    latency_us: Option<f32>,
+    /// Per compiled pane (index pane - 1): links between it and the source.
+    links: Vec<Links>,
+    sides: Vec<Side>,
 }
 
 impl Session {
@@ -57,34 +54,52 @@ impl Session {
     }
 
     fn build(m: Model, flat: bool) -> Session {
-        let mut s = Session { label: m.label, runtime: m.runtime, device: m.device, latency_us: m.latency_us, ..Default::default() };
+        let mut s = Session::default();
         let ns = m.source.nodes.len();
         s.panes.push(Pane::new(m.source, false, flat));
         if let Some(c) = m.compiled {
             let nc = c.nodes.len();
             s.panes.push(Pane::new(c, true, flat));
-            s.links = [vec![Vec::new(); ns], vec![Vec::new(); nc]];
+            let mut links: Links = [vec![Vec::new(); ns], vec![Vec::new(); nc]];
             for l in m.links {
                 if l.source != NONE && (l.source as usize) < ns && (l.compiled as usize) < nc {
-                    s.links[0][l.source as usize].push(LinkRef { other: l.compiled, grade: l.grade, via: l.via });
-                    s.links[1][l.compiled as usize].push(LinkRef { other: l.source, grade: l.grade, via: l.via });
+                    links[0][l.source as usize].push(LinkRef { other: l.compiled, grade: l.grade, via: l.via });
+                    links[1][l.compiled as usize].push(LinkRef { other: l.source, grade: l.grade, via: l.via });
                 }
             }
-            s.inferred = analysis::infer_structure(&s.panes[0], &s.panes[1], &mut s.links);
+            let inferred = analysis::infer_structure(&s.panes[0], &s.panes[1], &mut links);
+            s.links.push(links);
+            s.sides.push(Side { label: m.label, runtime: m.runtime, device: m.device, version: m.version, latency_us: m.latency_us, latency_range: m.latency_range, inferred });
         }
         s
     }
 
-    pub fn links(&self) -> &Links {
+    pub fn links(&self) -> &[Links] {
         &self.links
     }
 
     pub fn findings_json(&self) -> Vec<serde_json::Value> {
-        analysis::findings(&self.panes, &self.links, self.latency_us, self.inferred)
+        analysis::findings(&self.panes, &self.links, &self.sides)
     }
 
     pub fn pane(&self, i: usize) -> &Pane {
         &self.panes[i]
+    }
+
+    /// Add `other`'s compiled graph as a third pane. Both must be captures of the same source graph.
+    pub fn add_compiled(&mut self, mut other: Session) -> Result<(), String> {
+        if self.panes.len() != 2 || other.panes.len() != 2 {
+            return Err("comparing needs two bundles, each with a compiled graph".into());
+        }
+        let (a, b) = (&self.panes[0].graph, &other.panes[0].graph);
+        let same = a.nodes.len() == b.nodes.len() && a.nodes.iter().zip(&b.nodes).all(|(x, y)| x.op == y.op && x.name == y.name && x.inputs.len() == y.inputs.len());
+        if !same {
+            return Err(format!("the two bundles were captured from different source graphs ({} and {} nodes)", a.nodes.len(), b.nodes.len()));
+        }
+        self.panes.push(other.panes.swap_remove(1));
+        self.links.append(&mut other.links);
+        self.sides.append(&mut other.sides);
+        Ok(())
     }
 }
 
@@ -123,12 +138,13 @@ impl Session {
         self.panes.len()
     }
 
-    pub fn label(&self) -> String {
-        self.label.clone()
+    /// Runtime, version and device of a compiled pane; empty for the source pane.
+    pub fn label(&self, pane: usize) -> String {
+        pane.checked_sub(1).and_then(|c| self.sides.get(c)).map_or(String::new(), |s| s.label.clone())
     }
 
-    pub fn latency_us(&self) -> f32 {
-        self.latency_us.unwrap_or(f32::NAN)
+    pub fn latency_us(&self, pane: usize) -> f32 {
+        pane.checked_sub(1).and_then(|c| self.sides.get(c)).and_then(|s| s.latency_us).unwrap_or(f32::NAN)
     }
 
     pub fn node_count(&self, pane: usize) -> u32 {
@@ -162,25 +178,29 @@ impl Session {
     /// Show another session's source graph as this session's right pane, without provenance.
     pub fn attach(&mut self, mut other: Session) {
         self.panes.truncate(1);
-        self.links = Default::default();
+        self.links.clear();
+        self.sides.clear();
         if !other.panes.is_empty() {
             self.panes.push(other.panes.swap_remove(0));
         }
     }
 
-    /// Boxes linked to box `b` of `pane` in the other pane, with the best grade per box (0 explicit, 1 inferred).
-    pub fn linked(&self, pane: usize, b: u32) -> Object {
+    /// Compare: `other` is a capture of the same source by another runtime, device or version.
+    pub fn compare(&mut self, other: Session) -> Result<(), JsError> {
+        self.add_compiled(other).map_err(|e| JsError::new(&e))
+    }
+
+    /// Boxes of pane `to` linked to box `b` of `pane`, with the best grade per box (0 explicit, 1 inferred).
+    pub fn linked(&self, pane: usize, b: u32, to: usize) -> Object {
         let o = Object::new();
-        if self.panes.len() < 2 {
+        if to >= self.panes.len() {
             return o;
         }
-        let other = 1 - pane;
+        let nodes = self.panes[pane].box_nodes(b);
         let mut best: Vec<(u32, u8)> = Vec::new();
-        for v in self.panes[pane].box_nodes(b) {
-            for l in &self.links[pane][v as usize] {
-                for ob in self.panes[other].node_boxes([l.other]) {
-                    best.push((ob, if l.grade == Grade::Explicit { 0 } else { 1 }));
-                }
+        for (w, grade, _) in analysis::linked_nodes(&self.links, pane, &nodes, to) {
+            for ob in self.panes[to].node_boxes([w]) {
+                best.push((ob, if grade == Grade::Explicit { 0 } else { 1 }));
             }
         }
         best.sort_unstable();
@@ -194,7 +214,8 @@ impl Session {
     pub fn overlay(&self, pane: usize, mode: &str) -> Object {
         let o = Object::new();
         if let Some(m) = Overlay::parse(mode) {
-            let (cats, legend) = analysis::categories(&self.panes[pane], m, &self.runtime, &self.device);
+            let side = pane.checked_sub(1).and_then(|c| self.sides.get(c)).cloned().unwrap_or_default();
+            let (cats, legend) = analysis::categories(&self.panes[pane], m, &side.runtime, &side.device);
             set(&o, "cats", Uint16Array::from(&cats[..]));
             set(&o, "legend", legend.join("\n"));
         }
@@ -212,7 +233,7 @@ impl Session {
 
     /// Inspector data for one box, as JSON.
     pub fn inspect(&self, pane: usize, b: u32) -> String {
-        analysis::inspect(&self.panes, &self.links, self.latency_us, pane, b).to_string()
+        analysis::inspect(&self.panes, &self.links, &self.sides, pane, b).to_string()
     }
 
     /// Expand what is needed to show a node (or, with `group`, a group) and return its box, or -1.

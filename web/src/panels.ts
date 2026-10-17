@@ -24,6 +24,11 @@ export const us = (t: number | null | undefined) =>
   t == null ? "" : t >= 1000 ? `${(t / 1000).toFixed(2)} ms` : `${t.toFixed(t < 10 ? 1 : 0)} us`;
 
 const SECTIONS: [string, string][] = [
+  ["summary", "A vs B"],
+  ["delta", "where the time differs"],
+  ["fusion", "fused differently"],
+  ["precision-diff", "precision differs"],
+  ["kernel-diff", "kernels changed"],
   ["time", "time sinks"],
   ["unaccounted", "unaccounted source ops"],
   ["inserted", "kernels without a source op"],
@@ -63,8 +68,7 @@ export function renderFindings(body: HTMLElement, items: Finding[], pick: (f: Fi
 interface Tensor { name: string; dtype: string; shape: string | null; layout: string; from: string | null; constant: boolean }
 interface Inspect {
   pane: number; kind: string; count: number; time_us: number | null; share: number | null;
-  links: { node: number; name: string; op: string; grade: string; via: string; time_us: number | null }[];
-  link_count: number;
+  groups: { pane: number; count: number; links: { node: number; name: string; op: string; grade: string; via: string; time_us: number | null }[] }[];
   node?: { id: number; name: string; op: string; kernel: string; precision: string; time_us: number | null;
     attrs: [string, string][]; inputs: (Tensor | null)[]; outputs: Tensor[]; claims: string[] };
 }
@@ -78,7 +82,6 @@ function tensors(title: string, list: (Tensor | null)[]) {
 
 export function renderInspector(main: HTMLElement, side: HTMLElement, meta: HTMLElement, d: Inspect, paneNames: string[],
   title: string, follow: (pane: number, node: number) => void) {
-  const other = paneNames[1 - d.pane] ?? "";
   meta.textContent = `${paneNames[d.pane]} ${d.kind}`;
   main.replaceChildren();
   const n = d.node;
@@ -100,16 +103,18 @@ export function renderInspector(main: HTMLElement, side: HTMLElement, meta: HTML
     main.append(h("h4", {}, title), h("p", { class: "hint" }, `${d.count} ops${time}`));
   }
   side.replaceChildren();
-  if (paneNames.length < 2) return;
-  const head = h("p", { class: "label" }, d.link_count ? `provenance: ${d.link_count} in ${other}` : `no ${other} node linked`);
-  const ul = h("ul", { class: "links" });
-  for (const l of d.links) {
-    const li = h("li", { title: `${l.grade}${l.via ? ` via ${l.via}` : ""}` },
-      h("span", { class: `chip ${l.grade}` }, l.via === "structure" ? "struct" : l.grade),
-      h("span", {}, `${l.op}  ${l.name}`), h("span", { class: "faint" }, us(l.time_us)));
-    li.addEventListener("click", () => follow(1 - d.pane, l.node));
-    ul.append(li);
+  for (const g of d.groups) {
+    const other = paneNames[g.pane] ?? "";
+    const via = d.pane > 0 && g.pane > 0 ? " (through the source)" : "";
+    const ul = h("ul", { class: "links" });
+    for (const l of g.links) {
+      const li = h("li", { title: `${l.grade}${l.via ? ` via ${l.via}` : ""}` },
+        h("span", { class: `chip ${l.grade}` }, l.via === "structure" ? "struct" : l.grade),
+        h("span", {}, `${l.op}  ${l.name}`), h("span", { class: "faint" }, us(l.time_us)));
+      li.addEventListener("click", () => follow(g.pane, l.node));
+      ul.append(li);
+    }
+    side.append(h("p", { class: "label" }, g.count ? `provenance: ${g.count} in ${other}${via}` : `no ${other} node linked`), ul);
+    if (g.count > g.links.length) side.append(h("p", { class: "faint" }, `${g.count - g.links.length} more`));
   }
-  side.append(head, ul);
-  if (d.link_count > d.links.length) side.append(h("p", { class: "faint" }, `${d.link_count - d.links.length} more`));
 }

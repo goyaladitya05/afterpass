@@ -102,7 +102,7 @@ impl Graph {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Grade {
     Explicit,
     Inferred,
@@ -162,6 +162,10 @@ pub struct Model {
     pub label: String,
     pub runtime: String,
     pub device: String,
+    /// Runtime version without its build suffix, for example "2026.4.1".
+    pub version: String,
     /// Median whole-inference latency, when profiled.
     pub latency_us: Option<f32>,
+    /// Fastest and slowest inference of the profiled runs.
+    pub latency_range: Option<(f32, f32)>,
 }

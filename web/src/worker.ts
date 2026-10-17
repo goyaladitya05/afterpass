@@ -40,7 +40,18 @@ async function handle(req: Request): Promise<[unknown, Transferable[]]> {
   if (req.op === "load") {
     const t0 = performance.now();
     const next = await open(req.files[0]);
-    if (req.files[1]) next.attach(await open(req.files[1]));
+    if (req.files[1]) {
+      // two bundles of one source are compared; anything else is shown side by side without links
+      const other = await open(req.files[1]);
+      if (next.panes() === 2 && other.panes() === 2) {
+        try {
+          next.compare(other);
+        } catch (e) {
+          next.free();
+          throw e;
+        }
+      } else next.attach(other);
+    }
     if (req.flat) next.flatten();
     session?.free();
     session = next;
@@ -51,8 +62,10 @@ async function handle(req: Request): Promise<[unknown, Transferable[]]> {
       scenes.push(s.scene);
       transfer.push(...s.transfer);
     }
-    const nodes = Array.from({ length: panes }, (_, p) => session!.node_count(p));
-    return [{ scenes, nodes, label: session.label(), latency: session.latency_us(), ms: performance.now() - t0, wasmBytes: memory.buffer.byteLength }, transfer];
+    const all = Array.from({ length: panes }, (_, p) => p);
+    const nodes = all.map((p) => session!.node_count(p));
+    const labels = all.map((p) => session!.label(p)), latencies = all.map((p) => session!.latency_us(p));
+    return [{ scenes, nodes, labels, latencies, ms: performance.now() - t0, wasmBytes: memory.buffer.byteLength }, transfer];
   }
   if (!session) throw new Error("nothing loaded");
   const ses = session;
@@ -67,8 +80,11 @@ async function handle(req: Request): Promise<[unknown, Transferable[]]> {
     return [{ box, scene: sc.scene, wasmBytes: memory.buffer.byteLength }, sc.transfer];
   }
   if (req.op === "select") {
-    const linked = session.linked(req.pane, req.box) as { boxes?: Uint32Array; grades?: Uint8Array };
-    return [{ boxes: linked.boxes ?? new Uint32Array(), grades: linked.grades ?? new Uint8Array(), text: session.describe(req.pane, req.box) }, []];
+    const linked = panes.map((q) => {
+      const l = (q === req.pane ? {} : ses.linked(req.pane, req.box, q)) as { boxes?: Uint32Array; grades?: Uint8Array };
+      return { boxes: l.boxes ?? new Uint32Array(), grades: l.grades ?? new Uint8Array() };
+    });
+    return [{ linked, text: session.describe(req.pane, req.box) }, []];
   }
   const anchor = req.op === "toggle" ? session.toggle(req.pane, req.box) : session.step(req.pane, req.box, req.delta ?? 1);
   if (anchor < 0) return [{ anchor }, []];
