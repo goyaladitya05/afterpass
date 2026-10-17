@@ -1,0 +1,31 @@
+[project]
+name = "afterpass"
+version = "0.1.0"
+description = "Capture what a deployment compiler did to a model"
+authors = [
+    { name = "Aditya Goyal", email = "goyaladitya2403@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.4",
+    "onnx>=1.23.2",
+    "openvino>=2026.4.1",
+]
+
+[project.scripts]
+afterpass = "afterpass.cli:main"
+
+[project.optional-dependencies]
+tensorrt = [
+    "cuda-python>=12,<13",
+    "tensorrt-cu12>=11.4.0.106",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
