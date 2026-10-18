@@ -39,7 +39,8 @@ def _claims(metadata: str) -> list[str]:
 def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker) -> dict:
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
-    network = builder.create_network(0)
+    # strongly typed: precision comes from the model, as TensorRT 11 always does, so versions compile the same graph
+    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.STRONGLY_TYPED))
     parser = trt.OnnxParser(network, logger)
     if not parser.parse_from_file(str(model_path)):
         raise SystemExit("ONNX parse failed:\n" + "\n".join(str(parser.get_error(i)) for i in range(parser.num_errors)))
