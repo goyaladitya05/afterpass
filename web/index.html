@@ -3,6 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- the page loads only its own files and can send data nowhere else: a model is never uploaded -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <meta name="description" content="See what a deployment compiler did to your model: source and compiled graphs side by side, every fused kernel traced to its source ops." />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Cpath d=%27M3 3l6 5-6 5%27 fill=%27none%27 stroke=%27%23ff6a1a%27 stroke-width=%272.5%27/%3E%3C/svg%3E">
     <title>afterpass</title>
