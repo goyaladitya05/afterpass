@@ -1,5 +1,5 @@
 /* afterpass design tokens: the single source for colour, type, spacing and motion.
-   Dark is the default theme; light is selected with [data-theme="light"] or the OS preference. */
+   Dark is the default theme; light follows the OS preference. */
 
 :root {
   color-scheme: dark;
@@ -10,7 +10,6 @@
   --bg-deep: #0f0d0c;
   --bg-canvas: #12100f;
   --rule: #2a2522;
-  --rule-soft: #201c1a;
 
   /* text */
   --text: #ede7e0;
@@ -25,14 +24,12 @@
   --selection: #ff6a1a;
 
   /* status */
-  --ok: #6ee7a0;
   --warn: #f2c14e;
   --err: #ff7a66;
 
   /* provenance grades */
   --prov-explicit: #ede7e0;
   --prov-inferred: #f2c14e;
-  --prov-unknown: #5c5651;
 
   /* graph canvas: calm, no texture */
   --node-fill: #1f1b19;
@@ -41,7 +38,6 @@
   --edge: #4a433e;
   --node-selected: #ff6a1a;
   --node-linked: #ff9a5c;
-  --node-unfused: #ff7a66;
 
   /* overlay: time (sequential, low to high) */
   --time-0: #2b2522;
@@ -71,7 +67,6 @@
   --fs-base: 0.9375rem;
   --fs-lg: 1.0625rem;
   --fs-h3: clamp(1.25rem, 1.7vw, 1.5rem);
-  --fs-h2: clamp(2rem, 5vw, 3.75rem);
   --fs-h1: clamp(2.75rem, 7.4vw, 6.5rem);
   --fw-regular: 400;
   --fw-medium: 500;
@@ -89,12 +84,10 @@
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
-  --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
   --space-12: 3rem;
   --space-16: 4rem;
-  --space-24: 6rem;
 
   /* chrome dimensions */
   --topbar-h: 3rem;
@@ -104,7 +97,6 @@
 
   /* borders and shapes: square corners, cut-corner buttons */
   --border: 1px solid var(--rule);
-  --border-dashed: 1px dashed var(--rule);
   --radius: 0;
   --notch: 9px;
   --focus-ring: 2px solid var(--accent);
@@ -113,77 +105,21 @@
   /* texture (chrome only, never behind graph nodes) */
   --ascii-size: 0.625rem;
   --ascii-opacity: 0.16;
-  --ascii-opacity-hover: 0.3;
-  --grain-opacity: 0.035;
 
   /* motion */
-  --dur-micro: 150ms;
   --dur-fast: 200ms;
-  --dur-base: 500ms;
-  --dur-reveal: 700ms;
-  --dur-scramble: 340ms;
-  --dur-loader-max: 3000ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --ticker-period: 46s;
 }
 
-:root[data-theme="light"] {
-  color-scheme: light;
-  --bg: #f3eee8;
-  --bg-panel: #ebe5de;
-  --bg-deep: #e3dcd4;
-  --bg-canvas: #f7f3ee;
-  --rule: #d3cbc2;
-  --rule-soft: #e2dbd3;
-  --text: #1a1614;
-  --text-muted: #615a54;
-  --text-faint: #9a928a;
-  --accent: #d9480f;
-  --accent-hi: #c03f0c;
-  --accent-text: #b23c0a;
-  --on-accent: #fffaf5;
-  --selection: #d9480f;
-  --ok: #1f8a4c;
-  --warn: #9a6a00;
-  --err: #c2321d;
-  --prov-explicit: #1a1614;
-  --prov-inferred: #9a6a00;
-  --prov-unknown: #9a928a;
-  --node-fill: #fffcf8;
-  --node-stroke: #c9c0b6;
-  --node-text: #2a2420;
-  --edge: #b5aca2;
-  --node-selected: #d9480f;
-  --node-linked: #b23c0a;
-  --node-unfused: #c2321d;
-  --time-0: #ece4da;
-  --time-1: #f2cfa8;
-  --time-2: #eda56b;
-  --time-3: #df7a33;
-  --time-4: #c4520f;
-  --time-5: #7a2e05;
-  --cat-1: #2f6fd6;
-  --cat-2: #1f8a4c;
-  --cat-3: #8a4fd1;
-  --cat-4: #9a6a00;
-  --cat-5: #c2321d;
-  --cat-6: #23807f;
-  --cat-7: #a8507f;
-  --cat-8: #8a827a;
-  --ascii-opacity: 0.12;
-  --grain-opacity: 0.05;
-}
-
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
+  :root {
     color-scheme: light;
     --bg: #f3eee8;
     --bg-panel: #ebe5de;
     --bg-deep: #e3dcd4;
     --bg-canvas: #f7f3ee;
     --rule: #d3cbc2;
-    --rule-soft: #e2dbd3;
     --text: #1a1614;
     --text-muted: #615a54;
     --text-faint: #9a928a;
@@ -192,19 +128,16 @@
     --accent-text: #b23c0a;
     --on-accent: #fffaf5;
     --selection: #d9480f;
-    --ok: #1f8a4c;
     --warn: #9a6a00;
     --err: #c2321d;
     --prov-explicit: #1a1614;
     --prov-inferred: #9a6a00;
-    --prov-unknown: #9a928a;
     --node-fill: #fffcf8;
     --node-stroke: #c9c0b6;
     --node-text: #2a2420;
     --edge: #b5aca2;
     --node-selected: #d9480f;
     --node-linked: #b23c0a;
-    --node-unfused: #c2321d;
     --time-0: #ece4da;
     --time-1: #f2cfa8;
     --time-2: #eda56b;
@@ -220,17 +153,11 @@
     --cat-7: #a8507f;
     --cat-8: #8a827a;
     --ascii-opacity: 0.12;
-    --grain-opacity: 0.05;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   :root {
-    --dur-micro: 0ms;
     --dur-fast: 0ms;
-    --dur-base: 0ms;
-    --dur-reveal: 0ms;
-    --dur-scramble: 0ms;
-    --dur-loader-max: 0ms;
   }
 }

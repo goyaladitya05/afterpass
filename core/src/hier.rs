@@ -49,7 +49,7 @@ pub struct Hier {
     pub folded: Vec<bool>,
 }
 
-const IO_OPS: [&str; 4] = ["Parameter", "Result", "Input", "Output"];
+pub const IO_OPS: [&str; 4] = ["Parameter", "Result", "Input", "Output"];
 
 /// OpenVINO's generated names (`ReduceSum_7265191_Reshape`, `Convert_155150`): an op type, then a long numeric id.
 fn generated(token: &str) -> bool {
@@ -154,10 +154,10 @@ impl Hier {
         Hier { groups: vec![root], stacks: Vec::new(), node_group, folded }
     }
 
-    pub fn build(g: &Graph, compiled: bool) -> Hier {
+    /// `preds` and `succs` are the graph's adjacency (`Graph::adjacency`), which the caller already has.
+    pub fn build(g: &Graph, preds: &[Vec<u32>], succs: &[Vec<u32>], compiled: bool) -> Hier {
         let n = g.nodes.len();
         let folded = g.constant_nodes();
-        let (preds, succs) = g.adjacency();
 
         // 1. scopes
         let mut scope: Vec<Vec<String>> = g.nodes.iter().map(|node| {

@@ -50,10 +50,6 @@ impl Graph {
         id
     }
 
-    pub fn tensor_id(&self, name: &str) -> Option<u32> {
-        self.index.get(name).copied()
-    }
-
     /// Set tensor producers once all nodes are in, and drop the name index.
     pub fn finish(&mut self) {
         for (i, n) in self.nodes.iter().enumerate() {

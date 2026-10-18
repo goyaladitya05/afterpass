@@ -48,7 +48,7 @@ export function ticker(track: HTMLElement, words: string[]) {
 }
 
 /** Short loading screen: rows of compiler tokens resolve into text, then fade. Skipped on any input. */
-export function loader(el: HTMLElement): Promise<void> {
+export function loader(el: HTMLElement) {
   const pre = el.querySelector("pre")!;
   const finish = () => {
     el.classList.add("done");
@@ -56,7 +56,7 @@ export function loader(el: HTMLElement): Promise<void> {
   };
   if (reduced()) {
     el.remove();
-    return Promise.resolve();
+    return;
   }
   const width = Math.min(96, Math.floor(innerWidth / 6.2));
   const pinned = new Map([[5, "afterpass"], [7, "source graph  ->  compiled graph"], [9, "every kernel traced to its ops"]]);
@@ -68,33 +68,30 @@ export function loader(el: HTMLElement): Promise<void> {
     return line.slice(0, width);
   });
   const start = performance.now(), total = 1600;
-  return new Promise((resolve) => {
-    let done = false;
-    const stop = () => {
-      if (done) return;
-      done = true;
-      for (const ev of ["pointerdown", "keydown", "wheel"]) removeEventListener(ev, stop);
-      finish();
-      resolve();
-    };
-    for (const ev of ["pointerdown", "keydown", "wheel"]) addEventListener(ev, stop, { once: true });
-    const frame = (now: number) => {
-      if (done) return;
-      const t = now - start;
-      pre.innerHTML = "";
-      rows.forEach((row, r) => {
-        const local = Math.max(0, Math.min(1, (t - r * 30) / 600));
-        const shown = Math.floor(row.length * (1 - 2 ** (-10 * local)));
-        const settle = Math.max(0, Math.min(1, (t - r * 30 - 300) / 500));
-        const solid = Math.floor(shown * settle);
-        const line = row.slice(0, solid) + noise(row.slice(solid, shown));
-        const node = pinned.has(r) ? document.createElement("b") : document.createTextNode("");
-        node.textContent = line + "\n";
-        pre.appendChild(node);
-      });
-      if (t < total) requestAnimationFrame(frame);
-      else stop();
-    };
-    requestAnimationFrame(frame);
-  });
+  let done = false;
+  const stop = () => {
+    if (done) return;
+    done = true;
+    for (const ev of ["pointerdown", "keydown", "wheel"]) removeEventListener(ev, stop);
+    finish();
+  };
+  for (const ev of ["pointerdown", "keydown", "wheel"]) addEventListener(ev, stop, { once: true });
+  const frame = (now: number) => {
+    if (done) return;
+    const t = now - start;
+    pre.innerHTML = "";
+    rows.forEach((row, r) => {
+      const local = Math.max(0, Math.min(1, (t - r * 30) / 600));
+      const shown = Math.floor(row.length * (1 - 2 ** (-10 * local)));
+      const settle = Math.max(0, Math.min(1, (t - r * 30 - 300) / 500));
+      const solid = Math.floor(shown * settle);
+      const line = row.slice(0, solid) + noise(row.slice(solid, shown));
+      const node = pinned.has(r) ? document.createElement("b") : document.createTextNode("");
+      node.textContent = line + "\n";
+      pre.appendChild(node);
+    });
+    if (t < total) requestAnimationFrame(frame);
+    else stop();
+  };
+  requestAnimationFrame(frame);
 }

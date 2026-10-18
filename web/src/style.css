@@ -60,7 +60,7 @@ select, input[type="search"] {
   background: var(--bg-panel); border: var(--border); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
 }
 .results li { display: grid; grid-template-columns: 2.6rem 9rem 1fr; gap: var(--space-2); padding: var(--space-1) var(--space-2); cursor: pointer; font: var(--fs-xs) var(--font-mono); }
-.results li:hover, .results li.active { background: var(--bg); }
+.results li:hover { background: var(--bg); }
 .results li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .results .tag { color: var(--text-faint); }
 .results .empty { color: var(--text-faint); grid-template-columns: 1fr; cursor: default; }

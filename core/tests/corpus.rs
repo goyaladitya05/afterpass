@@ -26,6 +26,24 @@ impl onnx::ByteSource for FileSource {
     }
 }
 
+/// Bundles of the given corpus directories, sorted, as (label, decompressed JSON).
+fn bundles_in(dirs: &[&str]) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    for dir in dirs {
+        let Some(d) = corpus(dir) else { continue };
+        let mut files: Vec<_> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()).collect();
+        files.sort();
+        out.extend(files.into_iter().map(|f| (format!("{dir}/{}", f.file_name().unwrap().to_str().unwrap()), gunzip(&f))));
+    }
+    out
+}
+
+fn gunzip(path: &std::path::Path) -> Vec<u8> {
+    let mut json = Vec::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(path).unwrap()).read_to_end(&mut json).unwrap();
+    json
+}
+
 fn report(name: &str, t0: Instant, s: &Session) {
     print!("{name}: {:.0} ms", t0.elapsed().as_secs_f64() * 1e3);
     for p in 0..s.panes() {
@@ -56,7 +74,8 @@ fn ir_30b() {
 
 #[test]
 fn onnx_files() {
-    for rel in ["bert-base/bert-base.onnx", "tinyllama-1.1b/tinyllama-1.1b.onnx", "yolo11n/yolo11n.onnx", "resnet50/resnet50.onnx"] {
+    for rel in ["bert-base/bert-base.onnx", "tinyllama-1.1b/tinyllama-1.1b.onnx", "yolo11n/yolo11n.onnx", "resnet50/resnet50.onnx",
+                "synthetic/moe-48x128.onnx"] {
         let Some(p) = corpus(rel) else { continue };
         let t0 = Instant::now();
         let f = std::fs::File::open(p).unwrap();
@@ -69,68 +88,33 @@ fn onnx_files() {
 
 #[test]
 fn bundles() {
-    for dir in ["bundles", "bundles-lnl"] {
-        let Some(d) = corpus(dir) else { continue };
-        let mut files: Vec<_> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()).collect();
-        files.sort();
-        for f in files {
-            let t0 = Instant::now();
-            let mut json = Vec::new();
-            flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
-            let s = Session::from_model(bundle::parse(&json).unwrap());
-            report(f.file_name().unwrap().to_str().unwrap(), t0, &s);
-        }
-    }
-}
-
-#[test]
-fn synthetic_moe() {
-    let Some(p) = corpus("synthetic/moe-48x128.onnx") else { return };
-    let t0 = Instant::now();
-    let f = std::fs::File::open(p).unwrap();
-    let len = f.metadata().unwrap().len();
-    let g = onnx::parse(&mut FileSource(f, len)).unwrap();
-    let s = Session::from_model(Model { source: g, ..Default::default() });
-    report("synthetic/moe-48x128.onnx", t0, &s);
-}
-
-#[test]
-fn bundles_30b() {
-    let Some(d) = corpus("bundles-30b") else { return };
-    for f in std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()) {
+    for (name, json) in bundles_in(&["bundles", "bundles-lnl", "bundles-30b"]) {
         let t0 = Instant::now();
-        let mut json = Vec::new();
-        flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
         let s = Session::from_model(bundle::parse(&json).unwrap());
-        report(f.file_name().unwrap().to_str().unwrap(), t0, &s);
-        for x in s.findings_json().iter().filter(|x| x["section"] == "time") {
-            println!("  time: {} | {}", x["title"].as_str().unwrap(), x["detail"].as_str().unwrap());
+        report(&name, t0, &s);
+        if name.starts_with("bundles-30b") {
+            for x in s.findings_json().iter().filter(|x| x["section"] == "time") {
+                println!("  time: {} | {}", x["title"].as_str().unwrap(), x["detail"].as_str().unwrap());
+            }
         }
     }
 }
 
 #[test]
 fn structural_coverage() {
-    for dir in ["bundles", "bundles-lnl", "bundles-30b"] {
-        let Some(d) = corpus(dir) else { continue };
-        let mut files: Vec<_> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()).collect();
-        files.sort();
-        for f in files {
-            let mut json = Vec::new();
-            flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
-            let s = Session::from_model(bundle::parse(&json).unwrap());
-            let src = s.pane(0);
-            let path: Vec<usize> = (0..src.graph.nodes.len()).filter(|&v| afterpass_core::analysis::data_path(src, v)).collect();
-            let by = |structure: bool| path.iter().filter(|&&v| s.links()[0][0][v].iter().any(|l| structure || l.via != afterpass_core::ir::Via::Structure)).count();
-            let findings = s.findings_json();
-            let mut sections = std::collections::BTreeMap::new();
-            for x in &findings {
-                *sections.entry(x["section"].as_str().unwrap().to_string()).or_insert(0) += 1;
-            }
-            println!("{}: source covered {:.1}% by name, {:.1}% with structure; findings {:?}",
-                f.file_name().unwrap().to_str().unwrap(), 100.0 * by(false) as f64 / path.len() as f64,
-                100.0 * by(true) as f64 / path.len() as f64, sections);
+    for (name, json) in bundles_in(&["bundles", "bundles-lnl", "bundles-30b"]) {
+        let s = Session::from_model(bundle::parse(&json).unwrap());
+        let src = s.pane(0);
+        let path: Vec<usize> = (0..src.graph.nodes.len()).filter(|&v| afterpass_core::analysis::data_path(src, v)).collect();
+        let by = |structure: bool| path.iter().filter(|&&v| s.links()[0][0][v].iter().any(|l| structure || l.via != afterpass_core::ir::Via::Structure)).count();
+        let findings = s.findings_json();
+        let mut sections = std::collections::BTreeMap::new();
+        for x in &findings {
+            *sections.entry(x["section"].as_str().unwrap().to_string()).or_insert(0) += 1;
         }
+        println!("{name}: source covered {:.1}% by name, {:.1}% with structure; findings {:?}",
+            100.0 * by(false) as f64 / path.len() as f64,
+            100.0 * by(true) as f64 / path.len() as f64, sections);
     }
 }
 
@@ -146,15 +130,10 @@ fn compare_pairs() {
         ("bundles-trt10/yolo11n.tensorrt-gpu", "bundles-trt11/yolo11n.tensorrt-gpu"),
         ("bundles-trt10/resnet50-int8.tensorrt-gpu", "bundles-trt11/resnet50-int8.tensorrt-gpu"),
     ];
-    let load = |f: &str| {
-        let mut json = Vec::new();
-        let path = format!("{}/../corpus/{f}.afterpass.json.gz", env!("CARGO_MANIFEST_DIR"));
-        flate2::read::GzDecoder::new(std::fs::File::open(path).ok()?).read_to_end(&mut json).unwrap();
-        Some(Session::from_model(bundle::parse(&json).unwrap()))
-    };
+    let load = |f: &str| corpus(&format!("{f}.afterpass.json.gz")).map(|p| Session::from_model(bundle::parse(&gunzip(&p)).unwrap()));
     for (a, b) in pairs {
         let (Some(mut s), Some(other)) = (load(a), load(b)) else { continue };
-        let t0 = std::time::Instant::now();
+        let t0 = Instant::now();
         s.add_compiled(other).unwrap();
         let f = s.findings_json();
         println!("== {a} vs {b}: findings in {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
@@ -164,50 +143,43 @@ fn compare_pairs() {
     }
 }
 
-/// Accuracy of structural inference against a known answer: hide the explicit links of a fifth of the kernels,
+/// Accuracy of structural inference against a known answer: hide the explicit links of an eighth of the kernels,
 /// let inference recover them, and score the source ops that lost every explicit link.
 /// Recall: such ops linked to a kernel that really claimed them. Precision: inferred links that are right.
 #[test]
 fn structure_accuracy() {
-    for dir in ["bundles", "bundles-lnl", "bundles-30b"] {
-        let Some(d) = corpus(dir) else { continue };
-        let mut files: Vec<_> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()).collect();
-        files.sort();
-        for f in files {
-            let mut json = Vec::new();
-            flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
-            let (mut lost, mut found, mut right, mut predicted, mut among_hidden) = (0, 0, 0, 0, 0);
-            for seed in 1..=5u64 {
-                let mut m = bundle::parse(&json).unwrap();
-                let truth = std::mem::take(&mut m.links);
-                let mut kernels: Vec<u32> = truth.iter().filter(|l| l.grade == Grade::Explicit).map(|l| l.compiled).collect();
-                kernels.sort_unstable();
-                kernels.dedup();
-                // a fixed hash picks the hidden kernels, so runs are repeatable
-                let hidden: HashSet<u32> = kernels.into_iter()
-                    .filter(|&k| (k as u64 ^ seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 61 == 0).collect();
-                m.links = truth.iter().filter(|l| !hidden.contains(&l.compiled)).cloned().collect();
-                let kept: HashSet<u32> = m.links.iter().map(|l| l.source).collect();
-                let mut want: HashMap<u32, HashSet<u32>> = HashMap::new();
-                for l in truth.iter().filter(|l| hidden.contains(&l.compiled) && !kept.contains(&l.source)) {
-                    want.entry(l.source).or_default().insert(l.compiled);
-                }
-                let s = Session::from_model(m);
-                let src = s.pane(0);
-                for (&v, t) in want.iter().filter(|(v, _)| afterpass_core::analysis::data_path(src, **v as usize)) {
-                    let got: Vec<u32> = s.links()[0][0][v as usize].iter().map(|l| l.other).collect();
-                    lost += 1;
-                    found += got.iter().any(|k| t.contains(k)) as usize;
-                    right += got.iter().filter(|k| t.contains(k)).count();
-                    predicted += got.len();
-                    among_hidden += got.iter().filter(|k| !t.contains(k) && hidden.contains(k)).count();
-                }
+    for (name, json) in bundles_in(&["bundles", "bundles-lnl", "bundles-30b"]) {
+        let (mut lost, mut found, mut right, mut predicted, mut among_hidden) = (0, 0, 0, 0, 0);
+        for seed in 1..=5u64 {
+            let mut m = bundle::parse(&json).unwrap();
+            let truth = std::mem::take(&mut m.links);
+            let mut kernels: Vec<u32> = truth.iter().filter(|l| l.grade == Grade::Explicit).map(|l| l.compiled).collect();
+            kernels.sort_unstable();
+            kernels.dedup();
+            // a fixed hash picks the hidden kernels, so runs are repeatable
+            let hidden: HashSet<u32> = kernels.into_iter()
+                .filter(|&k| (k as u64 ^ seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 61 == 0).collect();
+            m.links = truth.iter().filter(|l| !hidden.contains(&l.compiled)).cloned().collect();
+            let kept: HashSet<u32> = m.links.iter().map(|l| l.source).collect();
+            let mut want: HashMap<u32, HashSet<u32>> = HashMap::new();
+            for l in truth.iter().filter(|l| hidden.contains(&l.compiled) && !kept.contains(&l.source)) {
+                want.entry(l.source).or_default().insert(l.compiled);
             }
-            if lost > 0 {
-                println!("{dir}/{}: {lost} ops lost their links over 5 runs; recall {:.1}%, precision {:.1}% ({right} of {predicted}); wrong links to other hidden kernels {among_hidden}, to kernels that kept their names {}",
-                    f.file_name().unwrap().to_str().unwrap(), 100.0 * found as f64 / lost as f64,
-                    100.0 * right as f64 / predicted.max(1) as f64, predicted - right - among_hidden);
+            let s = Session::from_model(m);
+            let src = s.pane(0);
+            for (&v, t) in want.iter().filter(|(v, _)| afterpass_core::analysis::data_path(src, **v as usize)) {
+                let got: Vec<u32> = s.links()[0][0][v as usize].iter().map(|l| l.other).collect();
+                lost += 1;
+                found += got.iter().any(|k| t.contains(k)) as usize;
+                right += got.iter().filter(|k| t.contains(k)).count();
+                predicted += got.len();
+                among_hidden += got.iter().filter(|k| !t.contains(k) && hidden.contains(k)).count();
             }
+        }
+        if lost > 0 {
+            println!("{name}: {lost} ops lost their links over 5 runs; recall {:.1}%, precision {:.1}% ({right} of {predicted}); wrong links to other hidden kernels {among_hidden}, to kernels that kept their names {}",
+                100.0 * found as f64 / lost as f64,
+                100.0 * right as f64 / predicted.max(1) as f64, predicted - right - among_hidden);
         }
     }
 }

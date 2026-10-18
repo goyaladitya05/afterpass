@@ -3,6 +3,9 @@
 
 import type { Atlas } from "./glyphs";
 
+/** Theme keys of the time heat ramp, coolest first. */
+export const RAMP = ["time-0", "time-1", "time-2", "time-3", "time-4", "time-5"];
+
 export interface Scene {
   boxes: Float32Array;
   kinds: Uint8Array;
@@ -174,7 +177,6 @@ export class Renderer {
   scene: Scene | null = null;
   view = { x: 0, y: 0, zoom: 1 };
   private pending = false;
-  onDraw: (() => void) | null = null;
 
   constructor(readonly canvas: HTMLCanvasElement, atlas: Atlas) {
     const gl = canvas.getContext("webgl2", { antialias: false, premultipliedAlpha: true, alpha: false });
@@ -244,7 +246,7 @@ export class Renderer {
     }
     const t = this.theme, n = scene.kinds.length;
     const maxTime = style.timeMax ?? sceneMaxTime(scene);
-    const ramp = [t["time-0"], t["time-1"], t["time-2"], t["time-3"], t["time-4"], t["time-5"]];
+    const ramp = RAMP.map((k) => t[k]);
     const heat = (v: number): RGBA | null => {
       if (style.overlay !== "time" || !(v > 0) || maxTime <= 0) return null;
       const k = Math.min(1, Math.log1p(v) / Math.log1p(maxTime)) * (ramp.length - 1);
@@ -410,7 +412,7 @@ export class Renderer {
     if (this.frameCount) {
       uniforms(this.box);
       gl.bindVertexArray(this.vaoBox);
-      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.frameCount);
+      this.drawFrom(0, this.frameCount);
     }
     if (this.segCount) {
       uniforms(this.seg);
@@ -434,7 +436,6 @@ export class Renderer {
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.glyphCount);
     }
     gl.bindVertexArray(null);
-    this.onDraw?.();
   }
 
   /** Draw box instances [first, first + count) by re-pointing the instance attributes. */
@@ -446,9 +447,5 @@ export class Renderer {
     gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, st, off + 20);
     gl.vertexAttribPointer(4, 2, gl.FLOAT, false, st, off + 24);
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
-    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, st, 0);
-    gl.vertexAttribPointer(2, 4, gl.UNSIGNED_BYTE, true, st, 16);
-    gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, st, 20);
-    gl.vertexAttribPointer(4, 2, gl.FLOAT, false, st, 24);
   }
 }

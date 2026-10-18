@@ -1,6 +1,6 @@
 import { asciiTexture, loader, scramble, ticker } from "./chrome";
 import { buildAtlas } from "./glyphs";
-import { Kind, Renderer, type RGBA, type Scene, sceneMaxTime, type Style, type Theme } from "./gl";
+import { Kind, RAMP, Renderer, type RGBA, type Scene, sceneMaxTime, type Style, type Theme } from "./gl";
 import { type Finding, h, pressable, renderFindings, renderInspector, us } from "./panels";
 import type { Request } from "./worker";
 
@@ -15,9 +15,9 @@ const landing = $<HTMLElement>("#landing");
 // theme
 const CATS = ["cat-1", "cat-2", "cat-3", "cat-4", "cat-5", "cat-6", "cat-7", "cat-8"];
 const THEME_KEYS = [
-  "bg", "bg-panel", "bg-canvas", "rule", "rule-soft", "text", "text-muted", "text-faint", "accent", "accent-text", "warn",
+  "bg", "bg-panel", "bg-canvas", "rule", "text-muted", "accent-text", "warn",
   "node-fill", "node-stroke", "node-text", "edge", "node-selected", "node-linked", "prov-inferred",
-  "time-0", "time-1", "time-2", "time-3", "time-4", "time-5", ...CATS,
+  ...RAMP, ...CATS,
 ];
 /** Fixed precision colours so fp32 means the same colour in every graph (order of the core's legend). */
 const PRECISION_CATS = ["cat-1", "cat-2", "cat-6", "cat-3", "cat-4", "cat-7"];
@@ -100,7 +100,7 @@ function renderLegend(i: number) {
   if (style.overlay === "time") {
     const max = style.timeMax ?? (r.scene ? sceneMaxTime(r.scene) : 0);
     if (!max) return;
-    const ramp = ["time-0", "time-1", "time-2", "time-3", "time-4", "time-5"].map((k) => css(theme[k])).join(",");
+    const ramp = RAMP.map((k) => css(theme[k])).join(",");
     legend.append(h("li", {}, h("i", { class: "ramp", style: `background: linear-gradient(90deg, ${ramp})` }), `0 to ${us(max)}`));
     return;
   }
@@ -129,7 +129,7 @@ async function select(p: number, box: number, opts: { center?: boolean } = {}) {
       revealLinked(q, l.boxes);
     });
     const title = panes[p].r.scene!.labels.split("\n")[box]?.split("\t")[0] ?? "";
-    renderInspector($("#inspect-main"), $("#inspect-links"), $("#inspector-meta"), insp, paneNames, title, follow);
+    renderInspector($("#inspect-main"), $("#inspect-links"), $("#inspector-meta"), insp, paneNames, title, reveal);
     if (opts.center) centerOn(p, box);
   } else {
     say("");
@@ -162,8 +162,7 @@ function revealLinked(p: number, boxes: Uint32Array) {
 
 async function afterSceneChange(p: number, scene: Scene, wasmBytes: number) {
   panes[p].r.scene = scene;
-  if (overlaySel.value !== "none" && overlaySel.value !== "time") await applyOverlay();
-  else syncTimeScale();
+  await applyOverlay();
   report(wasmBytes);
 }
 
@@ -187,7 +186,6 @@ async function reveal(p: number, target: number, group = false) {
   if (res.box >= 0) await select(p, res.box, { center: true });
   else say("that node is a folded constant and is not drawn");
 }
-const follow = (p: number, node: number) => reveal(p, node);
 
 // findings
 async function loadFindings() {
@@ -305,7 +303,7 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
 });
 
 // loading; while a load runs, clicks on the old graph or Findings would address the wrong session
-let loadStart = 0, loading = false;
+let loading = false;
 const inspectHint = $("#inspect-main").firstElementChild!.cloneNode(true);
 
 /** The status line; errors are coloured so a failed load is not missed. */
@@ -335,7 +333,7 @@ async function load(files: File[]) {
   say("");
   loading = true;
   $("#findings-body").replaceChildren();
-  loadStart = performance.now();
+  const loadStart = performance.now();
   showLanding(false);
   $<HTMLElement>("#loading").hidden = false;
   try {
@@ -478,7 +476,6 @@ async function start() {
   if (urls.length || params.has("bench")) loaderEl.remove();
   else loader(loaderEl);
   if (urls.length) {
-    loadStart = performance.now();
     Promise.all(urls.map(fetchFile)).then(load, (e) => say(e.message, true));
   }
 }

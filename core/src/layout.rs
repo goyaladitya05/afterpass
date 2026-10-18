@@ -133,14 +133,11 @@ pub fn layout(sizes: &[(f32, f32)], edges: &[(u32, u32)]) -> Layout {
         }
     }
     let mut order = vec![0f32; total];
-    let index = |layers: &Vec<Vec<usize>>, order: &mut Vec<f32>| {
-        for l in layers {
-            for (i, &v) in l.iter().enumerate() {
-                order[v] = i as f32;
-            }
+    for l in &layers {
+        for (i, &v) in l.iter().enumerate() {
+            order[v] = i as f32;
         }
-    };
-    index(&layers, &mut order);
+    }
     for sweep in 0..ORDER_SWEEPS {
         let down = sweep % 2 == 0;
         let ranks: Vec<usize> = if down { (1..nranks).collect() } else { (0..nranks.saturating_sub(1)).rev().collect() };

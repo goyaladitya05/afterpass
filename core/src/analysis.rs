@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde_json::{json, Value};
 
-use crate::hier::{majority_scope, mask_digits, scope_tokens};
+use crate::hier::{majority_scope, mask_digits, scope_tokens, IO_OPS as IO};
 use crate::ir::{Grade, Graph, Node, Via, NONE};
 use crate::view::{Item, Pane};
 
@@ -17,8 +17,6 @@ pub struct LinkRef {
 
 /// Per pane, per node: links to nodes of the other pane (index 0 is the source pane).
 pub type Links = [Vec<Vec<LinkRef>>; 2];
-
-const IO: [&str; 4] = ["Parameter", "Result", "Input", "Output"];
 
 /// Nodes that do work at inference time: not inputs or outputs, not computed from constants only.
 pub fn data_path(p: &Pane, v: usize) -> bool {
@@ -272,6 +270,28 @@ fn node_target(pane: usize, v: u32) -> Value {
     json!([pane, v, 0])
 }
 
+fn targets(pane: usize, vs: &[u32]) -> Vec<Value> {
+    vs.iter().map(|&v| node_target(pane, v)).collect()
+}
+
+/// `, 3.20 ms` when there is a time to report.
+fn timed(t: f32) -> String {
+    if t > 0.0 { format!(", {}", fmt_us(t)) } else { String::new() }
+}
+
+/// Kernels grouped by a key with their summed time: most time first, then most kernels.
+fn grouped<'a>(g: &Graph, kernels: impl Iterator<Item = (&'a str, u32)>) -> Vec<(&'a str, Vec<u32>, f32)> {
+    let mut by: HashMap<&str, (Vec<u32>, f32)> = HashMap::new();
+    for (key, v) in kernels {
+        let e = by.entry(key).or_default();
+        e.0.push(v);
+        e.1 += g.nodes[v as usize].time_us.unwrap_or(0.0);
+    }
+    let mut out: Vec<_> = by.into_iter().map(|(k, (vs, t))| (k, vs, t)).collect();
+    out.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap().then(b.1.len().cmp(&a.1.len())).then(a.0.cmp(b.0)));
+    out
+}
+
 /// One compiled graph of a session: what the runtime was and how it was timed.
 #[derive(Clone, Default, Debug)]
 pub struct Side {
@@ -367,27 +387,17 @@ fn side_findings(s: &Pane, c: &Pane, pane: usize, links: &Links, side: &Side, ta
         } else {
             (format!("{tag}{op}  {}", fmt_us(t)), format!("{:.1}% of latency  {}", 100.0 * t / base, first.name))
         };
-        out.push(item("time", "info", title, detail, vs.iter().map(|&v| node_target(pane, v)).collect()));
+        out.push(item("time", "info", title, detail, targets(pane, &vs)));
     }
     if let Some(l) = side.latency_us.filter(|&l| l > 0.0 && total > 0.0 && total < l * 0.9) {
         out.push(item("time", "warn", format!("{tag}unattributed  {}", fmt_us(l - total)),
             format!("{:.0}% of latency is in no kernel's profile (dispatch, sync, host work)", 100.0 * (l - total) / l), vec![]));
     }
     // kernels the runtime inserted: data-path compiled nodes with no source link
-    let mut inserted: HashMap<&str, (Vec<u32>, f32)> = HashMap::new();
-    for &v in &kernels {
-        if links[1][v as usize].is_empty() {
-            let e = inserted.entry(g.nodes[v as usize].op.as_str()).or_default();
-            e.0.push(v);
-            e.1 += g.nodes[v as usize].time_us.unwrap_or(0.0);
-        }
-    }
-    let mut ins: Vec<_> = inserted.into_iter().collect();
-    ins.sort_by(|a, b| b.1.1.partial_cmp(&a.1.1).unwrap().then(b.1.0.len().cmp(&a.1.0.len())).then(a.0.cmp(b.0)));
-    for (op, (vs, t)) in ins {
-        let time = if t > 0.0 { format!(", {}", fmt_us(t)) } else { String::new() };
+    let inserted = kernels.iter().filter(|&&v| links[1][v as usize].is_empty()).map(|&v| (g.nodes[v as usize].op.as_str(), v));
+    for (op, vs, t) in grouped(g, inserted) {
         out.push(item("inserted", "info", format!("{tag}{op}  x{}", vs.len()),
-            format!("no source op matches the names they claim: inserted by the runtime or renamed{time}"), vs.iter().map(|&v| node_target(pane, v)).collect()));
+            format!("no source op matches the names they claim: inserted by the runtime or renamed{}", timed(t)), targets(pane, &vs)));
     }
     // precision fallbacks against the dominant compute precision (by time when profiled)
     let mut weight: HashMap<&str, f32> = HashMap::new();
@@ -397,21 +407,10 @@ fn side_findings(s: &Pane, c: &Pane, pane: usize, links: &Links, side: &Side, ta
         }
     }
     if let Some((&dominant, _)) = weight.iter().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()) {
-        let mut other: HashMap<&str, (Vec<u32>, f32)> = HashMap::new();
-        for &v in &kernels {
-            let n = &g.nodes[v as usize];
-            if let Some(pc) = node_precision(g, n).filter(|&pc| pc != dominant) {
-                let e = other.entry(pc).or_default();
-                e.0.push(v);
-                e.1 += n.time_us.unwrap_or(0.0);
-            }
-        }
-        let mut other: Vec<_> = other.into_iter().collect();
-        other.sort_by(|a, b| b.1.1.partial_cmp(&a.1.1).unwrap().then(a.0.cmp(b.0)));
-        for (pc, (vs, t)) in other {
-            let time = if t > 0.0 { format!(", {}", fmt_us(t)) } else { String::new() };
+        let other = kernels.iter().filter_map(|&v| node_precision(g, &g.nodes[v as usize]).filter(|&pc| pc != dominant).map(|pc| (pc, v)));
+        for (pc, vs, t) in grouped(g, other) {
             out.push(item("precision", "warn", format!("{tag}{pc}  x{}", vs.len()),
-                format!("kernels outside the dominant {dominant}{time}"), vs.iter().map(|&v| node_target(pane, v)).collect()));
+                format!("kernels outside the dominant {dominant}{}", timed(t)), targets(pane, &vs)));
         }
     }
     // source ops no compiled node accounts for, even through structure
@@ -424,7 +423,7 @@ fn side_findings(s: &Pane, c: &Pane, pane: usize, links: &Links, side: &Side, ta
     for (op, vs) in un {
         out.push(item("unaccounted", "warn", format!("{tag}{op}  x{}", vs.len()),
             "no kernel claims these ops and their outputs reach several kernels: unfused, eliminated, or names lost".into(),
-            vs.iter().map(|&v| node_target(0, v)).collect()));
+            targets(0, &vs)));
     }
     if side.inferred > 0 {
         out.push(item("unaccounted", "info", format!("{tag}{} ops linked by structure", side.inferred),

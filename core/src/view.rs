@@ -87,8 +87,8 @@ fn clamp_w(chars: usize, min: f32, max: f32) -> f32 {
 
 impl Pane {
     pub fn new(graph: Graph, compiled: bool, flat: bool) -> Pane {
-        let hier = if flat { Hier::flat(&graph) } else { Hier::build(&graph, compiled) };
         let (preds, succs) = graph.adjacency();
+        let hier = if flat { Hier::flat(&graph) } else { Hier::build(&graph, &preds, &succs, compiled) };
         let n = graph.nodes.len();
         let mut p = Pane {
             graph,
@@ -270,19 +270,15 @@ impl Pane {
         let root = f == Frame::Group(0);
         let mut edges: Vec<(u32, u32)> = edges.into_iter().collect();
         edges.sort_unstable();
-        if !root && !ins.is_empty() {
+        for (inward, ends) in [(true, ins), (false, outs)] {
+            if root || ends.is_empty() {
+                continue;
+            }
             let p = items.len() as u32;
-            items.push(Item::Port(true));
-            let mut ins: Vec<u32> = ins.into_iter().collect();
-            ins.sort_unstable();
-            edges.extend(ins.into_iter().map(|i| (p, i)));
-        }
-        if !root && !outs.is_empty() {
-            let p = items.len() as u32;
-            items.push(Item::Port(false));
-            let mut outs: Vec<u32> = outs.into_iter().collect();
-            outs.sort_unstable();
-            edges.extend(outs.into_iter().map(|i| (i, p)));
+            items.push(Item::Port(inward));
+            let mut ends: Vec<u32> = ends.into_iter().collect();
+            ends.sort_unstable();
+            edges.extend(ends.into_iter().map(|i| if inward { (p, i) } else { (i, p) }));
         }
         // sizes, recursing into expanded children
         let mut children = Vec::with_capacity(items.len());
@@ -524,11 +520,8 @@ impl Pane {
         m
     }
 
-    /// Boxes currently showing the given nodes.
-    pub fn node_boxes(&self, nodes: impl IntoIterator<Item = u32>) -> Vec<u32> {
-        let mut b: Vec<u32> = nodes.into_iter().map(|v| self.node_box[v as usize]).filter(|&b| b != NONE).collect();
-        b.sort_unstable();
-        b.dedup();
-        b
+    /// The box currently showing node `v`, if it is drawn.
+    pub fn node_box(&self, v: u32) -> Option<u32> {
+        Some(self.node_box[v as usize]).filter(|&b| b != NONE)
     }
 }

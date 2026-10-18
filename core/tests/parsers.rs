@@ -8,6 +8,14 @@ fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
+fn toy_onnx() -> afterpass_core::ir::Graph {
+    onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap()
+}
+
+fn toy_session(bundle_file: &str) -> Session {
+    Session::from_model(bundle::parse(&gunzip(&fixture(bundle_file))).unwrap())
+}
+
 fn gunzip(b: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     flate2::read::GzDecoder::new(b).read_to_end(&mut out).unwrap();
@@ -66,8 +74,9 @@ fn scopes() {
 
 #[test]
 fn stacks_and_outliers() {
-    for g in [onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap(), ovir::parse(&fixture("toy.xml")).unwrap()] {
-        let h = Hier::build(&g, false);
+    for g in [toy_onnx(), ovir::parse(&fixture("toy.xml")).unwrap()] {
+        let (preds, succs) = g.adjacency();
+        let h = Hier::build(&g, &preds, &succs, false);
         assert_eq!(h.stacks.len(), 1);
         assert_eq!(h.stacks[0].count, 2);
         let outliers: Vec<&str> = h.groups.iter().filter(|g| g.outlier).map(|g| g.label.as_str()).collect();
@@ -103,7 +112,7 @@ fn fused_kernels_land_in_their_majority_scope() {
 #[test]
 fn stepping_a_stack_keeps_inner_expansion() {
     use afterpass_core::ir::Model;
-    let g = onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap();
+    let g = toy_onnx();
     let mut s = Session::from_model(Model { source: g, ..Default::default() });
     let titles = |s: &Session| s.pane(0).scene.titles.clone();
     let stack = titles(&s).iter().position(|t| t.starts_with("layers.0..1")).unwrap() as u32;
@@ -146,7 +155,7 @@ fn structure_recovers_ops_whose_names_were_lost() {
 #[test]
 fn reveal_opens_a_collapsed_stack() {
     use afterpass_core::ir::Model;
-    let g = onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap();
+    let g = toy_onnx();
     let v = g.nodes.iter().position(|n| n.name == "/model/layers.1/fc/Add").unwrap() as u32;
     let mut s = Session::from_model(Model { source: g, ..Default::default() });
     let b = s.reveal(0, v, false);
@@ -158,7 +167,7 @@ fn reveal_opens_a_collapsed_stack() {
 
 #[test]
 fn findings_cover_time_and_provenance() {
-    let s = Session::from_model(bundle::parse(&gunzip(&fixture("toy.tensorrt-gpu.afterpass.json.gz"))).unwrap());
+    let s = toy_session("toy.tensorrt-gpu.afterpass.json.gz");
     let f = s.findings_json();
     assert!(f.iter().any(|x| x["section"] == "time"));
     for x in &f {
@@ -170,9 +179,8 @@ fn findings_cover_time_and_provenance() {
 
 #[test]
 fn two_runtimes_compare_through_the_source() {
-    let load = |f: &str| Session::from_model(bundle::parse(&gunzip(&fixture(f))).unwrap());
-    let mut s = load("toy.openvino-cpu.afterpass.json.gz");
-    s.add_compiled(load("toy.tensorrt-gpu.afterpass.json.gz")).unwrap();
+    let mut s = toy_session("toy.openvino-cpu.afterpass.json.gz");
+    s.add_compiled(toy_session("toy.tensorrt-gpu.afterpass.json.gz")).unwrap();
     assert_eq!(s.links().len(), 2);
     // every linked kernel of A reaches kernels of B through the source ops they share
     let a = s.pane(1);
@@ -184,8 +192,8 @@ fn two_runtimes_compare_through_the_source() {
     assert!(sections.contains(&"delta"));
     assert!(f.iter().any(|x| x["title"].as_str().unwrap().starts_with("B  ")));
     // a capture of another source is refused
-    let mut other = load("toy.openvino-cpu.afterpass.json.gz");
-    let onnx_only = Session::from_model(afterpass_core::ir::Model { source: onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap(), ..Default::default() });
+    let mut other = toy_session("toy.openvino-cpu.afterpass.json.gz");
+    let onnx_only = Session::from_model(afterpass_core::ir::Model { source: toy_onnx(), ..Default::default() });
     assert!(other.add_compiled(onnx_only).is_err());
 }
 
@@ -233,7 +241,7 @@ fn bad_inputs_are_errors_not_panics() {
 /// Requests for panes, boxes or nodes that do not exist (stale clicks during a load) are refused, not panics.
 #[test]
 fn stale_ids_are_refused() {
-    let mut s = Session::from_model(bundle::parse(&gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"))).unwrap());
+    let mut s = toy_session("toy.openvino-cpu.afterpass.json.gz");
     for pane in [1, 2, 7] {
         assert_eq!(s.reveal(pane, 100_000, false), -1);
         assert_eq!(s.reveal(pane, 100_000, true), -1);

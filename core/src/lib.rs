@@ -50,16 +50,12 @@ pub struct Session {
 
 impl Session {
     pub fn from_model(m: Model) -> Session {
-        Session::build(m, false)
-    }
-
-    fn build(m: Model, flat: bool) -> Session {
         let mut s = Session::default();
         let ns = m.source.nodes.len();
-        s.panes.push(Pane::new(m.source, false, flat));
+        s.panes.push(Pane::new(m.source, false, false));
         if let Some(c) = m.compiled {
             let nc = c.nodes.len();
-            s.panes.push(Pane::new(c, true, flat));
+            s.panes.push(Pane::new(c, true, false));
             let mut links: Links = [vec![Vec::new(); ns], vec![Vec::new(); nc]];
             for l in m.links {
                 if l.source != NONE && (l.source as usize) < ns && (l.compiled as usize) < nc {
@@ -72,6 +68,11 @@ impl Session {
             s.sides.push(Side { label: m.label, runtime: m.runtime, device: m.device, version: m.version, latency_us: m.latency_us, latency_range: m.latency_range, inferred });
         }
         s
+    }
+
+    /// The capture behind a compiled pane; None for the source pane.
+    fn side(&self, pane: usize) -> Option<&Side> {
+        pane.checked_sub(1).and_then(|c| self.sides.get(c))
     }
 
     /// Requests can outlive the session they were made for (a click on the old Findings during a load).
@@ -110,11 +111,6 @@ impl Session {
 
 #[wasm_bindgen]
 impl Session {
-    #[wasm_bindgen(constructor)]
-    pub fn new() -> Session {
-        Session::default()
-    }
-
     pub fn load_bundle(json: &[u8]) -> Result<Session, JsError> {
         Ok(Session::from_model(bundle::parse(json).map_err(|e| JsError::new(&e))?))
     }
@@ -145,11 +141,11 @@ impl Session {
 
     /// Runtime, version and device of a compiled pane; empty for the source pane.
     pub fn label(&self, pane: usize) -> String {
-        pane.checked_sub(1).and_then(|c| self.sides.get(c)).map_or(String::new(), |s| s.label.clone())
+        self.side(pane).map_or(String::new(), |s| s.label.clone())
     }
 
     pub fn latency_us(&self, pane: usize) -> f32 {
-        pane.checked_sub(1).and_then(|c| self.sides.get(c)).and_then(|s| s.latency_us).unwrap_or(f32::NAN)
+        self.side(pane).and_then(|s| s.latency_us).unwrap_or(f32::NAN)
     }
 
     pub fn node_count(&self, pane: usize) -> u32 {
@@ -210,7 +206,7 @@ impl Session {
         let nodes = self.panes[pane].box_nodes(b);
         let mut best: Vec<(u32, u8)> = Vec::new();
         for (w, grade, _) in analysis::linked_nodes(&self.links, pane, &nodes, to) {
-            for ob in self.panes[to].node_boxes([w]) {
+            if let Some(ob) = self.panes[to].node_box(w) {
                 best.push((ob, if grade == Grade::Explicit { 0 } else { 1 }));
             }
         }
@@ -225,7 +221,7 @@ impl Session {
     pub fn overlay(&self, pane: usize, mode: &str) -> Object {
         let o = Object::new();
         if let Some(m) = Overlay::parse(mode) {
-            let side = pane.checked_sub(1).and_then(|c| self.sides.get(c)).cloned().unwrap_or_default();
+            let side = self.side(pane).cloned().unwrap_or_default();
             let (cats, legend) = analysis::categories(&self.panes[pane], m, &side.runtime, &side.device);
             set(&o, "cats", Uint16Array::from(&cats[..]));
             set(&o, "legend", legend.join("\n"));
