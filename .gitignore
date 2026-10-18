@@ -1,6 +1,6 @@
-# data and internal docs
+# data and internal docs (docs/ is never committed)
 corpus/
-notes/
+docs/
 
 # model files and bundles
 *.onnx

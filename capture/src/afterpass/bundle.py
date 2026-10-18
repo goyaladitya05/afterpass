@@ -1,4 +1,4 @@
-"""Bundle format v0: gzip-compressed JSON. Spec in notes/bundle-format.md."""
+"""Bundle format v0: gzip-compressed JSON. Spec in docs/notes/bundle-format.md."""
 
 import datetime
 import gzip

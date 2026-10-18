@@ -1,4 +1,4 @@
-//! Bundle format v0 reader (spec: notes/bundle-format.md). Input is the decompressed JSON.
+//! Bundle format v0 reader (spec: docs/notes/bundle-format.md). Input is the decompressed JSON.
 
 use serde_json::Value;
 
