@@ -18,6 +18,20 @@ export function h(tag: string, attrs: Record<string, string> = {}, ...children: 
   return el;
 }
 
+/** Make a list row act as a button: focusable, and Enter or Space runs it like a click. */
+export function pressable(el: HTMLElement, run: () => void): HTMLElement {
+  el.tabIndex = 0;
+  el.setAttribute("role", "button");
+  el.addEventListener("click", run);
+  el.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    e.stopPropagation();
+    run();
+  });
+  return el;
+}
+
 const pct = (share: number) => (share < 0.001 ? "<0.1%" : `${(share * 100).toFixed(1)}%`);
 
 export const us = (t: number | null | undefined) =>
@@ -53,7 +67,7 @@ export function renderFindings(body: HTMLElement, items: Finding[], pick: (f: Fi
       const li = h("li", { class: `${f.severity}${f.targets.length ? "" : " idle"}`, title: f.detail },
         h("div", { class: "t" }, h("span", {}, f.title), count), h("div", { class: "d" }, f.detail));
       if (f.targets.length) {
-        li.addEventListener("click", () => {
+        pressable(li, () => {
           pick(f, k);
           if (count) count.textContent = `${k + 1}/${f.targets.length}`;
           k = (k + 1) % f.targets.length;
@@ -111,7 +125,7 @@ export function renderInspector(main: HTMLElement, side: HTMLElement, meta: HTML
       const li = h("li", { title: `${l.grade}${l.via ? ` via ${l.via}` : ""}` },
         h("span", { class: `chip ${l.grade}` }, l.via === "structure" ? "struct" : l.grade),
         h("span", {}, `${l.op}  ${l.name}`), h("span", { class: "faint" }, us(l.time_us)));
-      li.addEventListener("click", () => follow(g.pane, l.node));
+      pressable(li, () => follow(g.pane, l.node));
       ul.append(li);
     }
     side.append(h("p", { class: "label" }, g.count ? `provenance: ${g.count} in ${other}${via}` : `no ${other} node linked`), ul);

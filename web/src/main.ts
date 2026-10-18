@@ -1,7 +1,7 @@
 import { asciiTexture, loader, scramble, ticker } from "./chrome";
 import { buildAtlas } from "./glyphs";
 import { Kind, Renderer, type RGBA, type Scene, sceneMaxTime, type Style, type Theme } from "./gl";
-import { type Finding, h, renderFindings, renderInspector, us } from "./panels";
+import { type Finding, h, pressable, renderFindings, renderInspector, us } from "./panels";
 import type { Request } from "./worker";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -122,7 +122,7 @@ async function select(p: number, box: number, opts: { center?: boolean } = {}) {
   panes[p].style.selected = box;
   if (box >= 0) {
     const [linked, insp] = await Promise.all([rpc({ op: "select", pane: p, box }), rpc({ op: "inspect", pane: p, box })]);
-    info.textContent = linked.text;
+    say(linked.text);
     linked.linked.forEach((l: { boxes: Uint32Array; grades: Uint8Array }, q: number) => {
       if (q === p || !l.boxes.length) return;
       l.boxes.forEach((b, i) => panes[q].style.linked.set(b, l.grades[i]));
@@ -132,7 +132,7 @@ async function select(p: number, box: number, opts: { center?: boolean } = {}) {
     renderInspector($("#inspect-main"), $("#inspect-links"), $("#inspector-meta"), insp, paneNames, title, follow);
     if (opts.center) centerOn(p, box);
   } else {
-    info.textContent = "";
+    say("");
   }
   for (let q = 0; q < paneCount; q++) restyle(q);
 }
@@ -185,7 +185,7 @@ async function reveal(p: number, target: number, group = false) {
   const res = await rpc({ op: "reveal", pane: p, target, group });
   await afterSceneChange(p, res.scene, res.wasmBytes);
   if (res.box >= 0) await select(p, res.box, { center: true });
-  else info.textContent = "that node is a folded constant and is not drawn";
+  else say("that node is a folded constant and is not drawn");
 }
 const follow = (p: number, node: number) => reveal(p, node);
 
@@ -214,7 +214,7 @@ searchInput.addEventListener("input", () => {
     const hits: { pane: number; node: number; name: string; op: string }[] = await rpc({ op: "search", query: q });
     for (const hit of hits) {
       const li = h("li", {}, h("span", { class: "tag" }, hit.pane === 0 ? "src" : paneCount === 3 ? paneNames[hit.pane] : "cmp"), h("span", {}, hit.op), h("span", {}, hit.name));
-      li.addEventListener("click", () => {
+      pressable(li, () => {
         results.hidden = true;
         reveal(hit.pane, hit.node);
       });
@@ -279,6 +279,18 @@ window.addEventListener("keydown", (e) => {
     searchInput.focus();
   }
   if (e.key === "f") panes.forEach(({ r }) => r.fit());
+  // arrows pan and +/- zoom the selected pane, or every pane when nothing is selected
+  const moves: Record<string, [number, number, number]> = { ArrowLeft: [-1, 0, 1], ArrowRight: [1, 0, 1], ArrowUp: [0, -1, 1], ArrowDown: [0, 1, 1], "+": [0, 0, 1.25], "=": [0, 0, 1.25], "-": [0, 0, 0.8] };
+  const m = moves[e.key];
+  if (m && paneCount) {
+    e.preventDefault();
+    for (const { r } of selection ? [panes[selection.pane]] : panes.slice(0, paneCount)) {
+      r.view.x += (m[0] * r.canvas.clientWidth) / 5 / r.view.zoom;
+      r.view.y += (m[1] * r.canvas.clientHeight) / 5 / r.view.zoom;
+      if (m[2] !== 1) r.zoomAt(r.canvas.clientWidth / 2, r.canvas.clientHeight / 2, m[2]);
+      r.requestDraw();
+    }
+  }
   if (!selection) return;
   if (e.key === "Enter") toggle(selection.pane, selection.box, "toggle");
   if (e.key === "]" || e.key === "[") toggle(selection.pane, selection.box, "step", e.key === "]" ? 1 : -1);
@@ -294,6 +306,13 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
 
 // loading
 let loadStart = 0;
+const inspectHint = $("#inspect-main").firstElementChild!.cloneNode(true);
+
+/** The status line; errors are coloured so a failed load is not missed. */
+function say(text: string, error = false) {
+  info.textContent = error ? `error: ${text}` : text;
+  info.classList.toggle("error", error);
+}
 
 function report(wasmBytes: number) {
   const heap = (performance as any).memory?.usedJSHeapSize as number | undefined;
@@ -310,7 +329,10 @@ function showLanding(show: boolean) {
 }
 
 async function load(files: File[]) {
+  // an IR's .bin chosen along with its .xml is not needed: weights are never read
+  files = files.filter((f) => !(f.name.endsWith(".bin") && files.some((x) => x.name === f.name.replace(/\.bin$/, ".xml"))));
   if (!files.length) return;
+  say("");
   loadStart = performance.now();
   showLanding(false);
   $<HTMLElement>("#loading").hidden = false;
@@ -339,7 +361,7 @@ async function load(files: File[]) {
     });
     overlaySel.value = latencies.some((l) => l === l) ? "time" : "none";
     await applyOverlay();
-    $("#inspect-main").replaceChildren(h("p", { class: "hint" }, "Select a node. Double-click a block to open it; [ and ] step through a stack."));
+    $("#inspect-main").replaceChildren(inspectHint.cloneNode(true));
     $("#inspect-links").replaceChildren();
     $("#inspector-meta").textContent = "";
     loadFindings();
@@ -351,7 +373,7 @@ async function load(files: File[]) {
     console.log(`[afterpass] load ${names}: interactive ${total.toFixed(0)} ms, worker ${res.ms.toFixed(0)} ms, transfer+upload ${(total - (tParsed - loadStart)).toFixed(0)} ms, nodes ${res.nodes.join("+")}, boxes ${boxes}, wasm ${res.wasmBytes} B, js heap ${(performance as any).memory?.usedJSHeapSize ?? "n/a"} B`);
     if (params.has("bench")) bench();
   } catch (err) {
-    info.textContent = `error: ${(err as Error).message}`;
+    say((err as Error).message, true);
     console.error(err);
     if (!paneCount) showLanding(true);
   } finally {
@@ -453,7 +475,7 @@ async function start() {
   else loader(loaderEl);
   if (urls.length) {
     loadStart = performance.now();
-    Promise.all(urls.map(fetchFile)).then(load, (e) => (info.textContent = `error: ${e.message}`));
+    Promise.all(urls.map(fetchFile)).then(load, (e) => say(e.message, true));
   }
 }
 

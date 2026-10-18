@@ -14,20 +14,28 @@ export type Request =
 let session: Session | null = null;
 const wasm = init();
 
+/** The file's kind from its first bytes, since names are often changed: gzip or JSON is a bundle, XML an IR,
+ * a protobuf starting with field 1 (ir_version) an ONNX model. */
 async function open(file: File): Promise<Session> {
-  const name = file.name.toLowerCase();
-  if (name.endsWith(".onnx")) {
-    const reader = new FileReaderSync();
-    const read = (offset: number, length: number) => new Uint8Array(reader.readAsArrayBuffer(file.slice(offset, offset + length)));
-    return Session.load_onnx(read, file.size);
+  const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+  const text = new TextDecoder().decode(head).trimStart();
+  try {
+    if (head[0] === 0x1f && head[1] === 0x8b) {
+      const stream = file.stream().pipeThrough(new DecompressionStream("gzip"));
+      return Session.load_bundle(new Uint8Array(await new Response(stream).arrayBuffer()));
+    }
+    if (text.startsWith("{")) return Session.load_bundle(new Uint8Array(await file.arrayBuffer()));
+    if (text.startsWith("<")) return Session.load_ir(new Uint8Array(await file.arrayBuffer()));
+    if (head[0] === 0x08 || file.name.toLowerCase().endsWith(".onnx")) {
+      const reader = new FileReaderSync();
+      const read = (offset: number, length: number) => new Uint8Array(reader.readAsArrayBuffer(file.slice(offset, offset + length)));
+      return Session.load_onnx(read, file.size);
+    }
+  } catch (e) {
+    throw new Error(`${file.name}: ${e instanceof Error ? e.message : e}`);
   }
-  if (name.endsWith(".xml")) return Session.load_ir(new Uint8Array(await file.arrayBuffer()));
-  let bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
-    bytes = new Uint8Array(await new Response(stream).arrayBuffer());
-  }
-  return Session.load_bundle(bytes);
+  if (file.name.toLowerCase().endsWith(".bin")) throw new Error(`${file.name} holds OpenVINO weights only: open the .xml next to it`);
+  throw new Error(`${file.name}: not an ONNX model, OpenVINO IR .xml or afterpass bundle`);
 }
 
 function scene(pane: number) {
@@ -39,10 +47,18 @@ async function handle(req: Request): Promise<[unknown, Transferable[]]> {
   const memory = (await wasm).memory;
   if (req.op === "load") {
     const t0 = performance.now();
-    const next = await open(req.files[0]);
-    if (req.files[1]) {
+    const files = req.files;
+    if (files.length > 2) throw new Error(`open one or two files, not ${files.length}`);
+    const next = await open(files[0]);
+    if (files[1]) {
       // two bundles of one source are compared; anything else is shown side by side without links
-      const other = await open(req.files[1]);
+      let other: Session;
+      try {
+        other = await open(files[1]);
+      } catch (e) {
+        next.free();
+        throw e;
+      }
       if (next.panes() === 2 && other.panes() === 2) {
         try {
           next.compare(other);
@@ -97,6 +113,10 @@ self.onmessage = async (e: MessageEvent<Request>) => {
     const [result, transfer] = await handle(e.data);
     self.postMessage({ id: e.data.id, result }, { transfer });
   } catch (err) {
-    self.postMessage({ id: e.data.id, error: String(err instanceof Error ? err.message : err) });
+    // a panic in the core aborts with a RuntimeError and leaves the wasm instance unusable
+    const fatal = err instanceof WebAssembly.RuntimeError;
+    if (fatal) session = null;
+    const message = fatal ? "internal error in the core; reload the page" : String(err instanceof Error ? err.message : err);
+    self.postMessage({ id: e.data.id, error: message });
   }
 };
