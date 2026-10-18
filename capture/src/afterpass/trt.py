@@ -32,6 +32,22 @@ class Profiler(trt.IProfiler):
         self.times.setdefault(name, []).append(ms * 1000.0)
 
 
+# TensorRT 11 reports Datatype and Format; TensorRT 10 one "Format/Datatype" string ("Row major linear FP32")
+DATATYPES = {"fp32", "fp16", "bf16", "fp8", "int4", "int8", "uint8", "int32", "int64", "bool", "float", "half"}
+
+
+def _datatype(io: dict):
+    if "Format/Datatype" not in io:
+        return io.get("Datatype")
+    return next((w for w in io["Format/Datatype"].split() if w.lower() in DATATYPES), None)
+
+
+def _format(io: dict):
+    if "Format/Datatype" not in io:
+        return io.get("Format")
+    return " ".join(w for w in io["Format/Datatype"].split() if w.lower() not in DATATYPES) or None
+
+
 def _claims(metadata: str) -> list[str]:
     return ONNX_LAYER.findall(metadata or "")
 
@@ -118,8 +134,8 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     for i, layer in enumerate(info["Layers"]):
         for io in layer.get("Inputs", []) + layer.get("Outputs", []):
             tensors.setdefault(io["Name"], {
-                "dtype": io.get("Datatype"), "shape": io.get("Dimensions"), "layout": io.get("Format"),
-                **{k: v for k, v in io.items() if k not in ("Name", "Datatype", "Dimensions", "Format")},
+                "dtype": _datatype(io), "shape": io.get("Dimensions"), "layout": _format(io),
+                **{k: v for k, v in io.items() if k not in ("Name", "Datatype", "Dimensions", "Format", "Format/Datatype")},
             })
         claims = _claims(layer.get("Metadata", ""))
         outputs = [o["Name"] for o in layer.get("Outputs", [])]
