@@ -2,6 +2,7 @@
   "name": "afterpass-web",
   "private": true,
   "version": "0.0.0",
+  "license": "Apache-2.0",
   "type": "module",
   "scripts": {
     "wasm": "wasm-pack build ../core --target web --out-dir ../web/pkg --release --no-pack",

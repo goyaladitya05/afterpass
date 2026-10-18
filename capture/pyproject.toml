@@ -5,6 +5,7 @@ description = "Capture what a deployment compiler did to a model"
 authors = [
     { name = "Aditya Goyal", email = "goyaladitya2403@gmail.com" }
 ]
+license = "Apache-2.0"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=2.5.4",

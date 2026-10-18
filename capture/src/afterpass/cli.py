@@ -56,7 +56,7 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="afterpass")
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("capture", help="compile a model, profile it and write a bundle")
-    c.add_argument("model", help="ONNX model")
+    c.add_argument("model", help="ONNX model (.onnx) or OpenVINO IR (.xml)")
     c.add_argument("--runtime", choices=["openvino", "tensorrt"], required=True)
     c.add_argument("--device", default="CPU", help="CPU, GPU or an OpenVINO device name such as GPU.1")
     c.add_argument("--shape", type=_shape, action="append", default=[], help="input shape override, name=d0,d1,...")
