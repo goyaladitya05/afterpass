@@ -131,6 +131,9 @@ pub fn parse(xml: &[u8]) -> Result<Graph, String> {
         }
         buf.clear();
     }
+    if layers.is_empty() {
+        return Err("no layers found: not an OpenVINO IR .xml".into());
+    }
 
     let mut g = Graph::default();
     let by_xml: HashMap<u32, usize> = layers.iter().enumerate().map(|(i, l)| (l.xml_id, i)).collect();

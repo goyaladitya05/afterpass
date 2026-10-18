@@ -4,7 +4,9 @@
 use std::io::Read;
 use std::time::Instant;
 
-use afterpass_core::ir::Model;
+use std::collections::{HashMap, HashSet};
+
+use afterpass_core::ir::{Grade, Model};
 use afterpass_core::{bundle, onnx, ovir, Session};
 
 fn corpus(rel: &str) -> Option<std::path::PathBuf> {
@@ -139,6 +141,10 @@ fn compare_pairs() {
         ("bundles/tinyllama-1.1b.tensorrt-gpu", "bundles-lnl/tinyllama-1.1b.openvino-gpu"),
         ("bundles-ov2025/tinyllama-1.1b.openvino-cpu", "bundles-ov2026/tinyllama-1.1b.openvino-cpu"),
         ("bundles/yolo11n.tensorrt-gpu", "bundles-lnl/yolo11n.openvino-gpu"),
+        ("bundles/resnet50-int8.tensorrt-gpu", "bundles/resnet50-int8.openvino-cpu"),
+        ("bundles-trt10/tinyllama-1.1b.tensorrt-gpu", "bundles-trt11/tinyllama-1.1b.tensorrt-gpu"),
+        ("bundles-trt10/yolo11n.tensorrt-gpu", "bundles-trt11/yolo11n.tensorrt-gpu"),
+        ("bundles-trt10/resnet50-int8.tensorrt-gpu", "bundles-trt11/resnet50-int8.tensorrt-gpu"),
     ];
     let load = |f: &str| {
         let mut json = Vec::new();
@@ -154,6 +160,54 @@ fn compare_pairs() {
         println!("== {a} vs {b}: findings in {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
         for x in f.iter().filter(|x| !["time", "inserted", "precision", "unaccounted", "outliers"].contains(&x["section"].as_str().unwrap())) {
             println!("  [{}] {} | {} | {} targets", x["section"].as_str().unwrap(), x["title"].as_str().unwrap(), x["detail"].as_str().unwrap(), x["targets"].as_array().unwrap().len());
+        }
+    }
+}
+
+/// Accuracy of structural inference against a known answer: hide the explicit links of a fifth of the kernels,
+/// let inference recover them, and score the source ops that lost every explicit link.
+/// Recall: such ops linked to a kernel that really claimed them. Precision: inferred links that are right.
+#[test]
+fn structure_accuracy() {
+    for dir in ["bundles", "bundles-lnl", "bundles-30b"] {
+        let Some(d) = corpus(dir) else { continue };
+        let mut files: Vec<_> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.path()).collect();
+        files.sort();
+        for f in files {
+            let mut json = Vec::new();
+            flate2::read::GzDecoder::new(std::fs::File::open(&f).unwrap()).read_to_end(&mut json).unwrap();
+            let (mut lost, mut found, mut right, mut predicted, mut among_hidden) = (0, 0, 0, 0, 0);
+            for seed in 1..=5u64 {
+                let mut m = bundle::parse(&json).unwrap();
+                let truth = std::mem::take(&mut m.links);
+                let mut kernels: Vec<u32> = truth.iter().filter(|l| l.grade == Grade::Explicit).map(|l| l.compiled).collect();
+                kernels.sort_unstable();
+                kernels.dedup();
+                // a fixed hash picks the hidden kernels, so runs are repeatable
+                let hidden: HashSet<u32> = kernels.into_iter()
+                    .filter(|&k| (k as u64 ^ seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 61 == 0).collect();
+                m.links = truth.iter().filter(|l| !hidden.contains(&l.compiled)).cloned().collect();
+                let kept: HashSet<u32> = m.links.iter().map(|l| l.source).collect();
+                let mut want: HashMap<u32, HashSet<u32>> = HashMap::new();
+                for l in truth.iter().filter(|l| hidden.contains(&l.compiled) && !kept.contains(&l.source)) {
+                    want.entry(l.source).or_default().insert(l.compiled);
+                }
+                let s = Session::from_model(m);
+                let src = s.pane(0);
+                for (&v, t) in want.iter().filter(|(v, _)| afterpass_core::analysis::data_path(src, **v as usize)) {
+                    let got: Vec<u32> = s.links()[0][0][v as usize].iter().map(|l| l.other).collect();
+                    lost += 1;
+                    found += got.iter().any(|k| t.contains(k)) as usize;
+                    right += got.iter().filter(|k| t.contains(k)).count();
+                    predicted += got.len();
+                    among_hidden += got.iter().filter(|k| !t.contains(k) && hidden.contains(k)).count();
+                }
+            }
+            if lost > 0 {
+                println!("{dir}/{}: {lost} ops lost their links over 5 runs; recall {:.1}%, precision {:.1}% ({right} of {predicted}); wrong links to other hidden kernels {among_hidden}, to kernels that kept their names {}",
+                    f.file_name().unwrap().to_str().unwrap(), 100.0 * found as f64 / lost as f64,
+                    100.0 * right as f64 / predicted.max(1) as f64, predicted - right - among_hidden);
+            }
         }
     }
 }

@@ -76,7 +76,12 @@ pub fn scope_tokens(name: &str) -> Vec<String> {
         if i + 1 == pieces.len() && pieces.len() > 1 {
             break; // the last piece names the op itself
         }
-        tokens.extend(p.split('.').filter(|t| !t.is_empty()).map(str::to_string));
+        // PyTorch exporters repeat the parent path in each piece (`/layer3/layer3.1/conv1`): keep only what is new
+        let t: Vec<&str> = p.split('.').filter(|t| !t.is_empty()).collect();
+        let overlap = (1..t.len().min(tokens.len() + 1)).rev()
+            .find(|&k| !t[0].bytes().all(|b| b.is_ascii_digit()) && tokens[tokens.len() - k..].iter().zip(&t).all(|(a, b)| a == b))
+            .unwrap_or(0);
+        tokens.extend(t[overlap..].iter().map(|t| t.to_string()));
     }
     if pieces.len() == 1 {
         tokens.pop(); // a dotted name such as model.layers.3.mlp: its last token is the op

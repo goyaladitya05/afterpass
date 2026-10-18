@@ -373,6 +373,10 @@ fn graph<S: ByteSource>(s: &mut Stream<S>, end: u64) -> Result<Graph, String> {
 
 /// Parse an ONNX model's topology. Only the graph protobuf is read; external data files are never touched.
 pub fn parse<S: ByteSource>(src: &mut S) -> Result<Graph, String> {
+    parse_model(src).map_err(|e| format!("not a readable ONNX model ({e})"))
+}
+
+fn parse_model<S: ByteSource>(src: &mut S) -> Result<Graph, String> {
     let len = src.len();
     let mut s = Stream { src, buf: Vec::new(), start: 0, pos: 0, len };
     while s.pos < len {

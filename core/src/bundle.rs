@@ -61,6 +61,9 @@ pub fn parse(json: &[u8]) -> Result<Model, String> {
         return Err(format!("unsupported bundle schema version {}", b["schema_version"]));
     }
     let source = graph(&b["source"]);
+    if source.nodes.is_empty() {
+        return Err("bundle has no source graph".into());
+    }
     let mut compiled = graph(&b["compiled"]);
     if let Some(times) = b["profile"]["nodes"].as_object() {
         for (id, t) in times {

@@ -96,6 +96,7 @@ pub fn infer_structure(src: &Pane, cmp: &Pane, links: &mut Links) -> usize {
         if region.len() > 50_000 {
             continue;
         }
+        // several kernels without names: the range is computed somewhere in them, which one is not known
         for v in region {
             for &k in &cluster {
                 add(links, v, k, &mut linked_src);
@@ -169,6 +170,21 @@ pub fn kernel_family(runtime: &str, n: &Node) -> String {
         }
         _ => k.to_string(),
     }
+}
+
+/// A TensorRT tactic without its per-layer suffix: Myelin kernels end in a hash or `_myl17_0`.
+fn tactic(k: &str) -> String {
+    let mut parts: Vec<&str> = k.split('_').collect();
+    while let Some(&p) = parts.last().filter(|_| parts.len() > 1) {
+        let digits = !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+        let hash = p.len() >= 8 && p.bytes().all(|b| b.is_ascii_hexdigit() || b == b'x') && p.bytes().any(|b| b.is_ascii_digit());
+        let myl = p.strip_prefix("myl").is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit()));
+        if !(digits || hash || myl) {
+            break;
+        }
+        parts.pop();
+    }
+    parts.join("_")
 }
 
 /// Short layout name: `acdb`, `bfyx`, or the bracketed part of a TensorRT format (`(Linear) Row major ...`).
@@ -269,10 +285,18 @@ pub struct Side {
     pub inferred: usize,
 }
 
-/// `op x3, Mul, Softmax x2`: counts of a list of names, most common first.
+const QDQ: [&str; 3] = ["QuantizeLinear", "DequantizeLinear", "FakeQuantize"];
+
+/// `op x3, Mul, Softmax x2`: counts of a list of names, most common first. Quantize and dequantize ops, which
+/// outnumber the compute ops of a quantized graph, are summed last as `Q/DQ xN`.
 fn counted<'a>(names: impl Iterator<Item = &'a str>, limit: usize) -> String {
     let mut counts: Vec<(&str, usize)> = Vec::new();
+    let mut qdq = 0;
     for n in names {
+        if QDQ.contains(&n) {
+            qdq += 1;
+            continue;
+        }
         match counts.iter_mut().find(|(m, _)| *m == n) {
             Some((_, c)) => *c += 1,
             None => counts.push((n, 1)),
@@ -282,6 +306,9 @@ fn counted<'a>(names: impl Iterator<Item = &'a str>, limit: usize) -> String {
     let mut parts: Vec<String> = counts.iter().take(limit).map(|(n, c)| if *c > 1 { format!("{n} x{c}") } else { n.to_string() }).collect();
     if counts.len() > limit {
         parts.push(format!("+{} more", counts.len() - limit));
+    }
+    if qdq > 0 {
+        parts.push(if qdq > 1 { format!("Q/DQ x{qdq}") } else { "Q/DQ".into() });
     }
     parts.join(", ")
 }
@@ -303,7 +330,8 @@ pub fn findings(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
             if gr.outlier && gr.parent != NONE {
                 let siblings = p.hier.groups[gr.parent as usize].children.iter()
                     .filter(|&&c| p.hier.groups[c as usize].index.is_some()).count();
-                out.push(item("outliers", "info", format!("{}.{}", p.hier.groups[gr.parent as usize].label.rsplit('/').next().unwrap_or(""), gr.label),
+                let tag = if panes.len() > 2 { ["", "A  ", "B  "][pi] } else { "" };
+                out.push(item("outliers", "info", format!("{tag}{}.{}", p.hier.groups[gr.parent as usize].label.rsplit('/').next().unwrap_or(""), gr.label),
                     format!("{} ops, structure differs from its {} siblings", gr.size, siblings - 1), vec![json!([pi, gid, 1])]));
             }
         }
@@ -315,14 +343,14 @@ fn side_findings(s: &Pane, c: &Pane, pane: usize, links: &Links, side: &Side, ta
     let mut out = Vec::new();
     let g = &c.graph;
     let kernels: Vec<u32> = (0..g.nodes.len()).filter(|&v| data_path(c, v)).map(|v| v as u32).collect();
-    // time sinks; kernels repeated per layer (same op and kernel, names equal up to digits) are summed
-    let mut sinks: HashMap<(&str, &str, String), (f32, Vec<u32>)> = HashMap::new();
+    // time sinks; kernels repeated per layer (same op, kernel and output shape, names equal up to digits) are summed
+    let mut sinks: HashMap<(&str, &str, String, Option<&Vec<i64>>), (f32, Vec<u32>)> = HashMap::new();
     let mut total = 0.0;
     for &v in &kernels {
         let n = &g.nodes[v as usize];
         if let Some(t) = n.time_us {
             total += t;
-            let e = sinks.entry((n.op.as_str(), n.kernel.as_str(), mask_digits(&n.name))).or_default();
+            let e = sinks.entry((n.op.as_str(), n.kernel.as_str(), mask_digits(&n.name), out_tensor(g, n).and_then(|t| t.shape.as_ref()))).or_default();
             e.0 += t;
             e.1.push(v);
         }
@@ -330,7 +358,7 @@ fn side_findings(s: &Pane, c: &Pane, pane: usize, links: &Links, side: &Side, ta
     let mut sinks: Vec<_> = sinks.into_iter().collect();
     sinks.sort_by(|a, b| b.1.0.partial_cmp(&a.1.0).unwrap().then(a.0.cmp(&b.0)));
     let base = side.latency_us.filter(|&l| l > 0.0).unwrap_or(total);
-    for ((op, _, _), (t, mut vs)) in sinks.into_iter().take(10) {
+    for ((op, ..), (t, mut vs)) in sinks.into_iter().take(10) {
         vs.sort_by(|&x, &y| g.nodes[y as usize].time_us.partial_cmp(&g.nodes[x as usize].time_us).unwrap());
         let first = &g.nodes[vs[0] as usize];
         let (title, detail) = if vs.len() > 1 {
@@ -522,7 +550,11 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
     let lat = [sides[0].latency_us, sides[1].latency_us];
     if let (Some(la), Some(lb)) = (lat[0], lat[1]) {
         let (slow, fast, ratio) = if la >= lb { ("A", "B", la / lb) } else { ("B", "A", lb / la) };
-        let verdict = if ratio < 1.02 { "Within 2% of each other".to_string() } else { format!("{slow} takes {ratio:.2}x as long as {fast}") };
+        let mut verdict = if ratio < 1.02 { "Within 2% of each other".to_string() } else { format!("{slow} takes {ratio:.2}x as long as {fast}") };
+        let hardware = |side: usize| sides[side].label.strip_prefix(&format!("{} {} ", sides[side].runtime, sides[side].version)).unwrap_or(&sides[side].label).to_string();
+        if hardware(0) != hardware(1) {
+            verdict += " on different hardware, so the gap is hardware and compiler together";
+        }
         let range = |side: usize| sides[side].latency_range.map_or(String::new(), |(lo, hi)| format!(", runs {} to {}", fmt_us(lo), fmt_us(hi)));
         out.push(item("summary", "info", format!("latency  A {}, B {}", fmt_us(la), fmt_us(lb)),
             format!("{verdict} (medians). A: {}{}. B: {}{}", sides[0].label, range(0), sides[1].label, range(1)), vec![]));
@@ -595,7 +627,9 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
         v
     };
     let families = |side: usize, r: &Region| -> Vec<String> {
-        let mut v: Vec<String> = r.k[side].iter().map(|&k| kernel_family(&sides[side].runtime, &c[side].graph.nodes[k as usize])).collect();
+        // TensorRT families are layer types; between two TensorRT builds the chosen tactic is what can change
+        let family = |n: &Node| if sides[side].runtime == "tensorrt" && !n.kernel.is_empty() { tactic(&n.kernel) } else { kernel_family(&sides[side].runtime, n) };
+        let mut v: Vec<String> = r.k[side].iter().map(|&k| family(&c[side].graph.nodes[k as usize])).collect();
         v.sort_unstable();
         v.dedup();
         v

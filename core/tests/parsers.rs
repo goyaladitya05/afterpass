@@ -60,6 +60,8 @@ fn scopes() {
     assert!(scope_tokens("Constant_12").is_empty());
     assert!(scope_tokens("ReduceSum_7265191_Reshape/MOECompressed").is_empty());
     assert_eq!(scope_tokens("/model/layers.0/Add_1"), ["model", "layers", "0"]);
+    assert_eq!(scope_tokens("/layer3/layer3.1/conv1/Conv"), ["layer3", "1", "conv1"]);
+    assert_eq!(scope_tokens("/model.23/cv3.0/cv3.0.0/cv3.0.0.0/conv/Conv"), ["model", "23", "cv3", "0", "0", "0", "conv"]);
 }
 
 #[test]
@@ -185,4 +187,45 @@ fn two_runtimes_compare_through_the_source() {
     let mut other = load("toy.openvino-cpu.afterpass.json.gz");
     let onnx_only = Session::from_model(afterpass_core::ir::Model { source: onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap(), ..Default::default() });
     assert!(other.add_compiled(onnx_only).is_err());
+}
+
+/// Damaged or foreign files must come back as errors: a panic would abort the wasm worker.
+#[test]
+fn bad_inputs_are_errors_not_panics() {
+    let onnx_bytes = fixture("toy.onnx");
+    let xml = fixture("toy.xml");
+    let json = gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"));
+    let open = |kind: &str, b: &[u8]| -> Result<Session, String> {
+        let s = match kind {
+            "onnx" => Session::from_model(afterpass_core::ir::Model { source: onnx::parse(&mut &b[..])?, ..Default::default() }),
+            "xml" => Session::from_model(afterpass_core::ir::Model { source: ovir::parse(b)?, ..Default::default() }),
+            _ => Session::from_model(bundle::parse(b)?),
+        };
+        let _ = s.findings_json();
+        Ok(s)
+    };
+    let mut cases: Vec<(&str, Vec<u8>)> = vec![("onnx", vec![]), ("xml", vec![]), ("bundle", vec![]),
+        ("onnx", b"<html>not a model</html>".to_vec()), ("xml", b"<html><body>hi</body></html>".to_vec()),
+        ("bundle", b"{\"format\": \"afterpass-bundle\", \"schema_version\": 0}".to_vec()),
+        ("bundle", b"{\"format\": \"afterpass-bundle\", \"schema_version\": 0, \"provenance\": [{\"compiled\": 99, \"source\": 99}]}".to_vec())];
+    for (kind, bytes) in [("onnx", &onnx_bytes), ("xml", &xml), ("bundle", &json)] {
+        for cut in (0..bytes.len()).step_by(bytes.len() / 97 + 1) {
+            cases.push((kind, bytes[..cut].to_vec()));
+        }
+    }
+    // a bundle whose links point outside its graphs
+    let mut v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    v["provenance"][0]["compiled"] = 100000.into();
+    v["provenance"][1]["source"] = 100000.into();
+    cases.push(("bundle", serde_json::to_vec(&v).unwrap()));
+    let (mut panics, mut empty) = (Vec::new(), Vec::new());
+    for (i, (kind, bytes)) in cases.iter().enumerate() {
+        match std::panic::catch_unwind(|| open(kind, bytes).map(|s| s.node_count(0))) {
+            Err(_) => panics.push((i, *kind, bytes.len())),
+            Ok(Ok(0)) => empty.push((i, *kind, bytes.len())),
+            _ => {}
+        }
+    }
+    assert!(panics.is_empty(), "panicked on {panics:?}");
+    assert!(empty.is_empty(), "loaded without nodes: {empty:?}");
 }
