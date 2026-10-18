@@ -86,13 +86,21 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
 
     feeds = random_inputs(specs)
     req = compiled.create_infer_request()
-    for _ in range(warmup):
-        req.infer(feeds)
-    latencies, per_node = [], {}
-    for _ in range(iterations):
+    # a stateful LLM keeps its KV cache between calls: reset it so every run is the same fresh prefill
+    stateful = bool(req.query_state())
+
+    def run() -> float:
+        if stateful:
+            req.reset_state()
         t = time.perf_counter()
         req.infer(feeds)
-        latencies.append((time.perf_counter() - t) * 1e6)
+        return (time.perf_counter() - t) * 1e6
+
+    for _ in range(warmup):
+        run()
+    latencies, per_node = [], {}
+    for _ in range(iterations):
+        latencies.append(run())
         entries = req.get_profiling_info()
         for p in entries:
             if p.status == p.Status.EXECUTED:
