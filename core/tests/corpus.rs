@@ -126,6 +126,7 @@ fn compare_pairs() {
         ("bundles-ov2025/tinyllama-1.1b.openvino-cpu", "bundles-ov2026/tinyllama-1.1b.openvino-cpu"),
         ("bundles/yolo11n.tensorrt-gpu", "bundles-lnl/yolo11n.openvino-gpu"),
         ("bundles/resnet50-int8.tensorrt-gpu", "bundles/resnet50-int8.openvino-cpu"),
+        ("bundles-trt11/resnet50-int8.tensorrt-gpu", "bundles-lnl/resnet50-int8.openvino-gpu"),
         ("bundles-trt10/tinyllama-1.1b.tensorrt-gpu", "bundles-trt11/tinyllama-1.1b.tensorrt-gpu"),
         ("bundles-trt10/yolo11n.tensorrt-gpu", "bundles-trt11/yolo11n.tensorrt-gpu"),
         ("bundles-trt10/resnet50-int8.tensorrt-gpu", "bundles-trt11/resnet50-int8.tensorrt-gpu"),
