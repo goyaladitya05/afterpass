@@ -17,6 +17,8 @@ def _shape(text: str) -> tuple[str, list[int]]:
 def capture(args) -> None:
     t0 = time.perf_counter()
     model = Path(args.model)
+    if args.iterations < 1 or args.warmup < 0:
+        sys.exit("--iterations must be at least 1 and --warmup at least 0")
     if not model.is_file():
         sys.exit(f"no such file: {model}")
     if model.suffix not in (".onnx", ".xml"):

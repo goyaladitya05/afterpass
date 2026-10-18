@@ -1,6 +1,5 @@
 """OpenVINO capture: compile with PERF_COUNT, run timed inferences, read the runtime model."""
 
-import statistics
 import time
 
 import openvino as ov
@@ -68,6 +67,9 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     if device not in core.available_devices:
         raise SystemExit(f"OpenVINO device {device} not available (have {core.available_devices})")
     model = core.read_model(str(model_path))
+    unknown = [n for n in shapes if not any(n in p.get_names() for p in model.inputs)]
+    if unknown:
+        raise SystemExit(f"--shape names no input: {unknown} (inputs: {[p.get_any_name() for p in model.inputs]})")
     if shapes:
         try:
             model.reshape(shapes)
@@ -96,15 +98,19 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
         req.infer(feeds)
         return (time.perf_counter() - t) * 1e6
 
+    # get_profiling_info() gives each node's mean over every inference since compile (all requests), not the
+    # last run's time (measured on CPU and GPU, 2026.4.1). The mean over the timed runs alone is recovered from
+    # the means before and after them.
+    def means() -> dict:
+        return {p.node_name: p.real_time.total_seconds() * 1e6 for p in req.get_profiling_info() if p.status == p.Status.EXECUTED}
+
     for _ in range(warmup):
         run()
-    latencies, per_node = [], {}
-    for _ in range(iterations):
-        latencies.append(run())
-        entries = req.get_profiling_info()
-        for p in entries:
-            if p.status == p.Status.EXECUTED:
-                per_node.setdefault(p.node_name, []).append(p.real_time.total_seconds() * 1e6)
+    before = means() if warmup else {}
+    latencies = [run() for _ in range(iterations)]
+    entries = req.get_profiling_info()
+    per_node = {name: max(0.0, ((warmup + iterations) * m - warmup * before.get(name, m)) / iterations)
+                for name, m in means().items()}
 
     # The runtime model is a snapshot: execTimeMcs is only filled if taken after an inference.
     nodes, tensors, links, ids, topology = _graph(compiled.get_runtime_model(), entries, linker)
@@ -132,10 +138,10 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
                      "device_name": core.get_property(device, "FULL_DEVICE_NAME"),
                      "properties": props, "topology": topology, "nodes": nodes, "tensors": tensors},
         "profile": {
-            "unit": "us", "iterations": iterations, "warmup": warmup, "source": "get_profiling_info, median per node",
+            "unit": "us", "iterations": iterations, "warmup": warmup, "source": "get_profiling_info running means, mean per node over the timed runs",
             "latency": stats(latencies),
-            "nodes": {str(ids[name]): statistics.median(v) for name, v in per_node.items() if name in ids},
-            "unmatched": {name: statistics.median(v) for name, v in per_node.items() if name not in ids},
+            "nodes": {str(ids[name]): t for name, t in per_node.items() if name in ids},
+            "unmatched": {name: t for name, t in per_node.items() if name not in ids},
         },
         "links": links,
         "compile_s": compile_s,

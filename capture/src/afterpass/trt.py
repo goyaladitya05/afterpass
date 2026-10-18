@@ -37,6 +37,8 @@ def _claims(metadata: str) -> list[str]:
 
 
 def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker) -> dict:
+    gpu = int(device.partition(".")[2] or 0)  # GPU.1 is CUDA device 1
+    _cuda(cudart.cudaSetDevice(gpu))
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
     # strongly typed: precision comes from the model, as TensorRT 11 always does, so versions compile the same graph
@@ -48,6 +50,9 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     config = builder.create_builder_config()
     config.profiling_verbosity = trt.ProfilingVerbosity.DETAILED
     inputs = [network.get_input(i) for i in range(network.num_inputs)]
+    unknown = [n for n in shapes if n not in {t.name for t in inputs}]
+    if unknown:
+        raise SystemExit(f"--shape names no input: {unknown} (inputs: {[t.name for t in inputs]})")
     if any(-1 in tuple(t.shape) for t in inputs):
         profile = builder.create_optimization_profile()
         for t in inputs:
@@ -68,8 +73,8 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     names = [engine.get_tensor_name(i) for i in range(engine.num_io_tensors)]
     in_names = [n for n in names if engine.get_tensor_mode(n) == trt.TensorIOMode.INPUT]
     for n in in_names:
-        if n in shapes:
-            context.set_input_shape(n, shapes[n])
+        if n in shapes and not context.set_input_shape(n, shapes[n]):
+            raise SystemExit(f"TensorRT rejected --shape {n}={shapes[n]}")
     feeds = random_inputs([(n, tuple(context.get_tensor_shape(n)), trt.nptype(engine.get_tensor_dtype(n))) for n in in_names])
     buffers = []
     for n in names:
@@ -133,7 +138,7 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
 
     ids = {n["name"]: n["id"] for n in nodes}
     medians = {name: statistics.median(v) for name, v in profiler.times.items()}
-    props = cudart.cudaGetDeviceProperties(0)[1]
+    props = cudart.cudaGetDeviceProperties(gpu)[1]
     return {
         "compiled": {"runtime": "tensorrt", "version": trt.__version__, "device": device,
                      "device_name": props.name.decode().rstrip("\x00"),
