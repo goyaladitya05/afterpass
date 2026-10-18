@@ -1,0 +1,62 @@
+name: ci
+
+# Tests and the site build on every push; the site deploys to GitHub Pages only on a published release or by hand.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --release
+        working-directory: core
+
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --group dev pytest -q tests
+        working-directory: capture
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: rustup target add wasm32-unknown-unknown && cargo install wasm-pack --version 0.15.0 --locked
+      - run: npm ci && npm run wasm && npm run build
+        working-directory: web
+      - name: smoke test (every demo loads, no page or console errors)
+        run: |
+          npx vite preview --port 4173 --strictPort &
+          sleep 2
+          node scripts/smoke.mjs
+        working-directory: web
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    needs: [core, capture, web]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
