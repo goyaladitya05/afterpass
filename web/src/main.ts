@@ -167,6 +167,7 @@ async function afterSceneChange(p: number, scene: Scene, wasmBytes: number) {
 }
 
 async function toggle(p: number, box: number, op: "toggle" | "step", delta = 1) {
+  if (loading) return;
   const { r } = panes[p];
   const [x, y] = boxRect(r.scene!, box);
   const [sx, sy] = [(x - r.view.x) * r.view.zoom, (y - r.view.y) * r.view.zoom];
@@ -182,7 +183,7 @@ async function toggle(p: number, box: number, op: "toggle" | "step", delta = 1) 
 async function reveal(p: number, target: number, group = false) {
   if (p >= paneCount || loading) return;
   const res = await rpc({ op: "reveal", pane: p, target, group });
-  await afterSceneChange(p, res.scene, res.wasmBytes);
+  if (res.scene) await afterSceneChange(p, res.scene, res.wasmBytes);
   if (res.box >= 0) await select(p, res.box, { center: true });
   else say("that node is a folded constant and is not drawn");
 }
@@ -481,5 +482,8 @@ async function start() {
 }
 
 start();
+
+// any failed request (not only a load) reaches the status line, not just the console
+window.addEventListener("unhandledrejection", (e) => say(e.reason instanceof Error ? e.reason.message : String(e.reason), true));
 
 if (import.meta.env.DEV) (window as any).__ap = { get panes() { return panes; }, rpc };

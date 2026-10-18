@@ -91,7 +91,8 @@ async function handle(req: Request): Promise<[unknown, Transferable[]]> {
   if (req.op === "search") return [panes.flatMap((p) => JSON.parse(ses.search(p, req.query, 40)).map((r: object) => ({ ...r, pane: p }))), []];
   if (req.op === "inspect") return [JSON.parse(ses.inspect(req.pane, req.box)), []];
   if (req.op === "reveal") {
-    const box = ses.reveal(req.pane, req.target, req.group);
+    if (req.pane >= ses.panes()) return [{ box: -1 }, []];
+    const box = ses.reveal(req.pane, req.target, req.group); // may expand groups even when it returns -1
     const sc = scene(req.pane);
     return [{ box, scene: sc.scene, wasmBytes: memory.buffer.byteLength }, sc.transfer];
   }
