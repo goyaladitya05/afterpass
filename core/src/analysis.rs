@@ -550,6 +550,11 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
     if let (Some(la), Some(lb)) = (lat[0], lat[1]) {
         let (slow, fast, ratio) = if la >= lb { ("A", "B", la / lb) } else { ("B", "A", lb / la) };
         let mut verdict = if ratio < 1.02 { "Within 2% of each other".to_string() } else { format!("{slow} takes {ratio:.2}x as long as {fast}") };
+        // the slower side's fastest run is no slower than the faster side's median: the gap is run-to-run noise
+        let (si, fi) = if slow == "A" { (0, 1) } else { (1, 0) };
+        if ratio >= 1.02 && sides[si].latency_range.is_some_and(|(lo, _)| lo <= lat[fi].unwrap_or(0.0)) {
+            verdict += ", within run-to-run noise (its fastest run beats the other's median)";
+        }
         let hardware = |side: usize| sides[side].label.strip_prefix(&format!("{} {} ", sides[side].runtime, sides[side].version)).unwrap_or(&sides[side].label).to_string();
         if hardware(0) != hardware(1) {
             verdict += " on different hardware, so the gap is hardware and compiler together";
@@ -605,8 +610,8 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
             let d = a.t[0] - a.t[1];
             let slow = if d > 0.0 { "A" } else { "B" };
             out.push(item("delta", if d.abs() > 0.05 * total { "warn" } else { "info" }, format!("{}{}  {slow} +{}", a.label, x(a), fmt_us(d.abs())),
-                format!("A {} in {} {}, B {} in {} {}{}; {}{}", fmt_us(a.t[0]), kc(a, 0), plural(kc(a, 0)), fmt_us(a.t[1]), kc(a, 1), plural(kc(a, 1)),
-                    if a.regions.len() > 1 { " each" } else { "" }, src_ops(a), hedge(a)), targets(a)));
+                format!("{}A {} in {} {}, B {} in {} {}; {}{}", if a.regions.len() > 1 { "summed over all, kernels per copy: " } else { "" },
+                    fmt_us(a.t[0]), kc(a, 0), plural(kc(a, 0)), fmt_us(a.t[1]), kc(a, 1), plural(kc(a, 1)), src_ops(a), hedge(a)), targets(a)));
         }
     }
     // fused differently
@@ -677,7 +682,8 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
     for (list, section) in [(&mut prec, "precision-diff"), (&mut impls, "kernel-diff")] {
         list.sort_by(|a, b| weight(b.0).partial_cmp(&weight(a.0)).unwrap());
         for (a, pa, pb) in list.iter().take(12) {
-            let time = if times_known { format!("A {}, B {}; ", fmt_us(a.t[0]), fmt_us(a.t[1])) } else { String::new() };
+            let all = if a.regions.len() > 1 { "summed over all: " } else { "" };
+            let time = if times_known { format!("{all}A {}, B {}; ", fmt_us(a.t[0]), fmt_us(a.t[1])) } else { String::new() };
             let title = if section == "precision-diff" { format!("{}{}  A {pa}, B {pb}", a.label, x(a)) } else { format!("{}{}", a.label, x(a)) };
             let detail = if section == "precision-diff" { format!("{time}{}{}", src_ops(a), hedge(a)) } else { format!("A: {pa}. B: {pb}. {time}{}{}", src_ops(a), hedge(a)) };
             out.push(item(section, "info", title, detail, targets(a)));
