@@ -74,6 +74,11 @@ impl Session {
         s
     }
 
+    /// Requests can outlive the session they were made for (a click on the old Findings during a load).
+    fn has_box(&self, pane: usize, b: u32) -> bool {
+        self.panes.get(pane).is_some_and(|p| (b as usize) < p.scene.kinds.len())
+    }
+
     pub fn links(&self) -> &[Links] {
         &self.links
     }
@@ -168,10 +173,16 @@ impl Session {
     }
 
     pub fn toggle(&mut self, pane: usize, b: u32) -> i32 {
+        if !self.has_box(pane, b) {
+            return -1;
+        }
         self.panes[pane].toggle(b)
     }
 
     pub fn step(&mut self, pane: usize, b: u32, delta: i32) -> i32 {
+        if !self.has_box(pane, b) {
+            return -1;
+        }
         self.panes[pane].step(b, delta)
     }
 
@@ -193,7 +204,7 @@ impl Session {
     /// Boxes of pane `to` linked to box `b` of `pane`, with the best grade per box (0 explicit, 1 inferred).
     pub fn linked(&self, pane: usize, b: u32, to: usize) -> Object {
         let o = Object::new();
-        if to >= self.panes.len() {
+        if to >= self.panes.len() || !self.has_box(pane, b) {
             return o;
         }
         let nodes = self.panes[pane].box_nodes(b);
@@ -233,17 +244,27 @@ impl Session {
 
     /// Inspector data for one box, as JSON.
     pub fn inspect(&self, pane: usize, b: u32) -> String {
+        if !self.has_box(pane, b) {
+            return "null".into();
+        }
         analysis::inspect(&self.panes, &self.links, &self.sides, pane, b).to_string()
     }
 
     /// Expand what is needed to show a node (or, with `group`, a group) and return its box, or -1.
     pub fn reveal(&mut self, pane: usize, id: u32, group: bool) -> i32 {
-        let p = &mut self.panes[pane];
+        let Some(p) = self.panes.get_mut(pane) else { return -1 };
+        let n = if group { p.hier.groups.len() } else { p.graph.nodes.len() };
+        if id as usize >= n {
+            return -1;
+        }
         if group { p.reveal_group(id) } else { p.reveal_node(id) }
     }
 
     /// Details of one box for the status line: node name, op, kernel, precision, output shapes, attributes.
     pub fn describe(&self, pane: usize, b: u32) -> String {
+        if !self.has_box(pane, b) {
+            return String::new();
+        }
         let p = &self.panes[pane];
         let nodes = p.box_nodes(b);
         if nodes.len() != 1 {

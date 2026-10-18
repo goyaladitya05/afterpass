@@ -120,7 +120,7 @@ async function select(p: number, box: number, opts: { center?: boolean } = {}) {
   }
   selection = box >= 0 ? { pane: p, box } : null;
   panes[p].style.selected = box;
-  if (box >= 0) {
+  if (box >= 0 && !loading) {
     const [linked, insp] = await Promise.all([rpc({ op: "select", pane: p, box }), rpc({ op: "inspect", pane: p, box })]);
     say(linked.text);
     linked.linked.forEach((l: { boxes: Uint32Array; grades: Uint8Array }, q: number) => {
@@ -181,7 +181,7 @@ async function toggle(p: number, box: number, op: "toggle" | "step", delta = 1) 
 
 /** Open whatever hides a node (or group) and select it. */
 async function reveal(p: number, target: number, group = false) {
-  if (p >= paneCount) return;
+  if (p >= paneCount || loading) return;
   const res = await rpc({ op: "reveal", pane: p, target, group });
   await afterSceneChange(p, res.scene, res.wasmBytes);
   if (res.box >= 0) await select(p, res.box, { center: true });
@@ -304,8 +304,8 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   applyOverlay();
 });
 
-// loading
-let loadStart = 0;
+// loading; while a load runs, clicks on the old graph or Findings would address the wrong session
+let loadStart = 0, loading = false;
 const inspectHint = $("#inspect-main").firstElementChild!.cloneNode(true);
 
 /** The status line; errors are coloured so a failed load is not missed. */
@@ -333,6 +333,8 @@ async function load(files: File[]) {
   files = files.filter((f) => !(f.name.endsWith(".bin") && files.some((x) => x.name === f.name.replace(/\.bin$/, ".xml"))));
   if (!files.length) return;
   say("");
+  loading = true;
+  $("#findings-body").replaceChildren();
   loadStart = performance.now();
   showLanding(false);
   $<HTMLElement>("#loading").hidden = false;
@@ -376,7 +378,9 @@ async function load(files: File[]) {
     say((err as Error).message, true);
     console.error(err);
     if (!paneCount) showLanding(true);
+    else loadFindings(); // the previous model stays on screen
   } finally {
+    loading = false;
     $<HTMLElement>("#loading").hidden = true;
   }
 }

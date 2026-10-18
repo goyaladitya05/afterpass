@@ -229,3 +229,17 @@ fn bad_inputs_are_errors_not_panics() {
     assert!(panics.is_empty(), "panicked on {panics:?}");
     assert!(empty.is_empty(), "loaded without nodes: {empty:?}");
 }
+
+/// Requests for panes, boxes or nodes that do not exist (stale clicks during a load) are refused, not panics.
+#[test]
+fn stale_ids_are_refused() {
+    let mut s = Session::from_model(bundle::parse(&gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"))).unwrap());
+    for pane in [1, 2, 7] {
+        assert_eq!(s.reveal(pane, 100_000, false), -1);
+        assert_eq!(s.reveal(pane, 100_000, true), -1);
+        assert_eq!(s.toggle(pane, 100_000), -1);
+        assert_eq!(s.step(pane, 100_000, 1), -1);
+        assert_eq!(s.describe(pane, 100_000), "");
+        assert_eq!(s.inspect(pane, 100_000), "null");
+    }
+}
