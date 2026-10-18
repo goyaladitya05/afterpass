@@ -175,7 +175,7 @@ fn tactic(k: &str) -> String {
     let mut parts: Vec<&str> = k.split('_').collect();
     while let Some(&p) = parts.last().filter(|_| parts.len() > 1) {
         let digits = !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
-        let hash = p.len() >= 8 && p.bytes().all(|b| b.is_ascii_hexdigit() || b == b'x') && p.bytes().any(|b| b.is_ascii_digit());
+        let hash = p.len() >= 8 && p.starts_with("0x") && p[2..].bytes().all(|b| b.is_ascii_hexdigit());
         let myl = p.strip_prefix("myl").is_some_and(|r| !r.is_empty() && r.bytes().all(|b| b.is_ascii_digit()));
         if !(digits || hash || myl) {
             break;
@@ -422,12 +422,12 @@ fn side_findings(s: &Pane, c: &Pane, pane: usize, links: &Links, side: &Side, ta
     un.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
     for (op, vs) in un {
         out.push(item("unaccounted", "warn", format!("{tag}{op}  x{}", vs.len()),
-            "no kernel claims these ops and their outputs reach several kernels: unfused, eliminated, or names lost".into(),
+            "no kernel claims these ops and structure cannot place them (their outputs reach several kernels, or none): unfused, eliminated, or names lost".into(),
             targets(0, &vs)));
     }
     if side.inferred > 0 {
         out.push(item("unaccounted", "info", format!("{tag}{} ops linked by structure", side.inferred),
-            "unclaimed ops whose outputs reach a single kernel; links graded inferred".into(), vec![]));
+            "unclaimed ops placed by graph structure (between named neighbours, or feeding a single kernel); links graded inferred".into(), vec![]));
     }
     out
 }
@@ -561,7 +561,7 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
     let kernels = [0, 1].map(|side| (0..c[side].graph.nodes.len()).filter(|&k| data_path(c[side], k)).count());
     let profiled = [0, 1].map(|side| (0..c[side].graph.nodes.len()).filter(|&k| data_path(c[side], k)).filter_map(|k| c[side].graph.nodes[k].time_us).sum::<f32>());
     let coverage: Vec<String> = (0..2).filter(|&side| profiled[side] > 0.0).map(|side| match lat[side] {
-        Some(l) if profiled[side] > l * 1.05 => format!("{} kernel times sum to {:.0}% of latency (the profiler serialises kernels)", name[side], 100.0 * profiled[side] / l),
+        Some(l) if profiled[side] > l * 1.05 => format!("{} kernel times sum to {:.0}% of latency: profiling inflates them (it serialises GPU kernels, and adds overhead per kernel)", name[side], 100.0 * profiled[side] / l),
         Some(l) => format!("{} kernel times cover {:.0}% of latency", name[side], 100.0 * profiled[side] / l),
         None => format!("{} kernel times sum to {}", name[side], fmt_us(profiled[side])),
     }).collect();
@@ -653,6 +653,7 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
         }
     }
     // a precision change that holds almost everywhere (fp32 on CPU, fp16 on GPU) is one finding, not one per region
+    let precision_differs = !prec.is_empty();
     let mut patterns: HashMap<(String, String), (usize, f32)> = HashMap::new();
     for (a, pa, pb) in &prec {
         let e = patterns.entry((pa.clone(), pb.clone())).or_default();
@@ -669,7 +670,7 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
             "the two runtimes compute at different precisions throughout; regions that deviate are listed below".into(), targets));
         prec.retain(|x| !(x.1 == pa && x.2 == pb));
     }
-    if same_target && prec.is_empty() && impls.is_empty() && aggs.iter().all(|a| kc(a, 0) == kc(a, 1)) {
+    if same_target && !precision_differs && impls.is_empty() && aggs.iter().all(|a| kc(a, 0) == kc(a, 1)) {
         out.push(item("summary", "info", "same kernels".into(),
             "every region of source ops runs the same number of kernels, of the same families and precisions, on both sides".into(), vec![]));
     }

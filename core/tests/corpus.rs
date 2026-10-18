@@ -20,9 +20,9 @@ impl onnx::ByteSource for FileSource {
     fn len(&self) -> u64 {
         self.1
     }
-    fn read(&mut self, offset: u64, buf: &mut [u8]) {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
         use std::os::unix::fs::FileExt;
-        self.0.read_exact_at(buf, offset).unwrap();
+        self.0.read_exact_at(buf, offset).map_err(|e| e.to_string())
     }
 }
 
@@ -177,7 +177,7 @@ fn structure_accuracy() {
             }
         }
         if lost > 0 {
-            println!("{name}: {lost} ops lost their links over 5 runs; recall {:.1}%, precision {:.1}% ({right} of {predicted}); wrong links to other hidden kernels {among_hidden}, to kernels that kept their names {}",
+            println!("{name}: {lost} ops lost their links over 5 runs; recall {:.1}%, precision {:.1}% ({right} of {predicted}); wrong links to other hidden kernels {among_hidden}, to other kernels (named or inserted) {}",
                 100.0 * found as f64 / lost as f64,
                 100.0 * right as f64 / predicted.max(1) as f64, predicted - right - among_hidden);
         }

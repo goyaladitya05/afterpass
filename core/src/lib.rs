@@ -26,11 +26,14 @@ impl onnx::ByteSource for JsSource {
     fn len(&self) -> u64 {
         self.len
     }
-    fn read(&mut self, offset: u64, buf: &mut [u8]) {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
         let r = self.read.call2(&JsValue::NULL, &JsValue::from_f64(offset as f64), &JsValue::from_f64(buf.len() as f64));
-        if let Ok(a) = r {
-            Uint8Array::new(&a).copy_to(buf);
+        let a = Uint8Array::new(&r.map_err(|e| format!("reading the file failed: {e:?}"))?);
+        if a.length() as usize != buf.len() {
+            return Err(format!("short read at byte {offset}"));
         }
+        a.copy_to(buf);
+        Ok(())
     }
 }
 
@@ -98,7 +101,12 @@ impl Session {
             return Err("comparing needs two bundles, each with a compiled graph".into());
         }
         let (a, b) = (&self.panes[0].graph, &other.panes[0].graph);
-        let same = a.nodes.len() == b.nodes.len() && a.nodes.iter().zip(&b.nodes).all(|(x, y)| x.op == y.op && x.name == y.name && x.inputs.len() == y.inputs.len());
+        // same ops, names and edges (input tensor names), node by node
+        fn tensor(g: &ir::Graph, t: u32) -> Option<&str> {
+            g.tensors.get(t as usize).map(|t| t.name.as_str())
+        }
+        let same = a.nodes.len() == b.nodes.len() && a.nodes.iter().zip(&b.nodes).all(|(x, y)| x.op == y.op && x.name == y.name
+            && x.inputs.len() == y.inputs.len() && x.inputs.iter().zip(&y.inputs).all(|(&i, &j)| tensor(a, i) == tensor(b, j)));
         if !same {
             return Err(format!("the two bundles were captured from different source graphs ({} and {} nodes)", a.nodes.len(), b.nodes.len()));
         }
@@ -149,13 +157,14 @@ impl Session {
     }
 
     pub fn node_count(&self, pane: usize) -> u32 {
-        self.panes[pane].graph.nodes.len() as u32
+        self.panes.get(pane).map_or(0, |p| p.graph.nodes.len() as u32)
     }
 
     /// Render data: boxes [x, y, w, h], kinds, flags, times, labels ("title\tsubtitle" per line), segs [x0, y0, x1, y1].
     pub fn scene(&self, pane: usize) -> Object {
-        let sc = &self.panes[pane].scene;
         let o = Object::new();
+        let Some(p) = self.panes.get(pane) else { return o };
+        let sc = &p.scene;
         set(&o, "boxes", Float32Array::from(&sc.boxes[..]));
         set(&o, "kinds", Uint8Array::from(&sc.kinds[..]));
         set(&o, "flags", Uint8Array::from(&sc.flags[..]));
@@ -220,7 +229,7 @@ impl Session {
     /// Overlay categories per box: `cats` indexes `legend` (one name per line); 65535 is none.
     pub fn overlay(&self, pane: usize, mode: &str) -> Object {
         let o = Object::new();
-        if let Some(m) = Overlay::parse(mode) {
+        if let Some(m) = Overlay::parse(mode).filter(|_| pane < self.panes.len()) {
             let side = self.side(pane).cloned().unwrap_or_default();
             let (cats, legend) = analysis::categories(&self.panes[pane], m, &side.runtime, &side.device);
             set(&o, "cats", Uint16Array::from(&cats[..]));
@@ -235,7 +244,8 @@ impl Session {
     }
 
     pub fn search(&self, pane: usize, query: &str, limit: usize) -> String {
-        serde_json::to_string(&analysis::search(&self.panes[pane], query, limit)).unwrap_or_default()
+        let Some(p) = self.panes.get(pane) else { return "[]".into() };
+        serde_json::to_string(&analysis::search(p, query, limit)).unwrap_or_default()
     }
 
     /// Inspector data for one box, as JSON.

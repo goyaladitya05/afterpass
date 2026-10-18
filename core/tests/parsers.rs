@@ -251,3 +251,50 @@ fn stale_ids_are_refused() {
         assert_eq!(s.inspect(pane, 100_000), "null");
     }
 }
+
+/// A node too big to buffer (a Constant holding a 65 MiB tensor) keeps its name, op and edges.
+#[test]
+fn oversized_nodes_keep_their_edges() {
+    fn field(out: &mut Vec<u8>, num: u64, payload: &[u8]) {
+        for mut v in [num << 3 | 2, payload.len() as u64] {
+            while v >= 0x80 {
+                out.push(v as u8 | 0x80);
+                v >>= 7;
+            }
+            out.push(v as u8);
+        }
+        out.extend_from_slice(payload);
+    }
+    let (mut big, mut relu, mut graph, mut model) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    field(&mut big, 2, b"c");
+    field(&mut big, 3, b"big");
+    field(&mut big, 4, b"Constant");
+    field(&mut big, 5, &vec![0u8; 65 << 20]);
+    field(&mut relu, 1, b"c");
+    field(&mut relu, 2, b"y");
+    field(&mut relu, 4, b"Relu");
+    field(&mut graph, 1, &big);
+    field(&mut graph, 1, &relu);
+    field(&mut model, 7, &graph);
+    let g = onnx::parse(&mut &model[..]).unwrap();
+    assert_eq!(g.nodes.len(), 2);
+    assert_eq!((g.nodes[0].name.as_str(), g.nodes[0].op.as_str()), ("big", "Constant"));
+    assert_eq!(g.tensors[g.nodes[1].inputs[0] as usize].producer, 0);
+}
+
+/// Stepping to a unit shown before uses its new expansion, not the cached layout from last time.
+#[test]
+fn stepping_to_a_visited_unit_shows_the_carried_expansion() {
+    use afterpass_core::ir::Model;
+    let mut s = Session::from_model(Model { source: toy_onnx(), ..Default::default() });
+    let find = |s: &Session, f: &dyn Fn(&String) -> bool| s.pane(0).scene.titles.iter().position(|t| f(t)).unwrap() as u32;
+    let stack = |t: &String| t.starts_with("layers.0..1");
+    s.toggle(0, find(&s, &stack));
+    s.step(0, find(&s, &stack), 1); // visit unit 2, so its layout is cached
+    s.step(0, find(&s, &stack), -1);
+    assert!(s.toggle(0, find(&s, &|t| t == "fc")) >= 0, "expand fc in unit 1");
+    let open = s.pane(0).scene.titles.len();
+    s.step(0, find(&s, &stack), 1);
+    assert!(s.pane(0).scene.titles.iter().any(|t| t.contains("unit 2/2")));
+    assert_eq!(s.pane(0).scene.titles.len(), open, "fc should be expanded in unit 2 too");
+}

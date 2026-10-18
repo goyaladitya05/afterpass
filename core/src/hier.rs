@@ -12,6 +12,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use crate::analysis::precision_class;
 use crate::ir::{Graph, NONE};
 
 #[derive(Debug, Default, Clone)]
@@ -304,9 +305,11 @@ impl Hier {
                 .filter(|t| t.constant || (t.producer != NONE && self.folded[t.producer as usize]))
                 .map(|t| &t.shape).collect();
             let attrs: Vec<(&String, String)> = if compiled { Vec::new() } else {
-                node.attrs.iter().filter(|(k, _)| k != "offset" && k != "size").map(|(k, v)| (k, mask_digits(v))).collect()
+                node.attrs.iter().filter(|(k, _)| k != "offset" && k != "size")
+                    // type names keep their digits: f16 and f32 must not hash alike
+                    .map(|(k, v)| (k, if precision_class(v).is_some() { v.clone() } else { mask_digits(v) })).collect()
             };
-            h((&node.op, weights, attrs, node.inputs.len()))
+            h((&node.op, weights, attrs, node.inputs.len(), &node.precision))
         }).collect();
         let mut local: HashMap<u32, u64> = HashMap::new();
         let mut members = Vec::new();

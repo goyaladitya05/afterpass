@@ -398,7 +398,7 @@ impl Pane {
 
     /// Show another unit of an expanded stack. Returns the stack's box, or -1.
     pub fn step(&mut self, b: u32, delta: i32) -> i32 {
-        let Some(&(item @ Item::Stack(s), frame)) = self.scene.refs.get(b as usize) else { return -1 };
+        let Some(&(item @ Item::Stack(s), _)) = self.scene.refs.get(b as usize) else { return -1 };
         if !self.expanded.contains(&item) {
             return -1;
         }
@@ -413,7 +413,8 @@ impl Pane {
             self.expanded.extend(carried);
         }
         self.unit.insert(s, next);
-        self.invalidate(frame);
+        // the new unit may have been laid out before, with the expansion it had then: drop every cached frame
+        self.cache.clear();
         self.rebuild();
         self.find(item)
     }

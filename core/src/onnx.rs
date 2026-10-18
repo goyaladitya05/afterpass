@@ -6,16 +6,18 @@ use crate::ir::{Graph, Node, NONE};
 /// Random-access bytes: a file in the browser (`File.slice` via FileReaderSync) or on disk in tests.
 pub trait ByteSource {
     fn len(&self) -> u64;
-    fn read(&mut self, offset: u64, buf: &mut [u8]);
+    /// Fill `buf` with the bytes at `offset`.
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String>;
 }
 
 impl ByteSource for &[u8] {
     fn len(&self) -> u64 {
         <[u8]>::len(self) as u64
     }
-    fn read(&mut self, offset: u64, buf: &mut [u8]) {
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
         let o = offset as usize;
         buf.copy_from_slice(&self[o..o + buf.len()]);
+        Ok(())
     }
 }
 
@@ -39,7 +41,7 @@ impl<'a, S: ByteSource> Stream<'a, S> {
         if self.pos < self.start || self.pos >= self.start + self.buf.len() as u64 {
             let n = WINDOW.min((self.len - self.pos) as usize);
             self.buf.resize(n, 0);
-            self.src.read(self.pos, &mut self.buf);
+            self.src.read(self.pos, &mut self.buf)?;
             self.start = self.pos;
         }
         let b = self.buf[(self.pos - self.start) as usize];
@@ -69,7 +71,7 @@ impl<'a, S: ByteSource> Stream<'a, S> {
             let o = (self.pos - self.start) as usize;
             out.copy_from_slice(&self.buf[o..o + n as usize]);
         } else {
-            self.src.read(self.pos, &mut out);
+            self.src.read(self.pos, &mut out)?;
         }
         self.pos += n;
         Ok(out)
@@ -104,6 +106,14 @@ enum Value<'a> {
     Bytes(&'a [u8]),
     Fixed32(u32),
     Fixed64,
+}
+
+fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push(v as u8 | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
 }
 
 fn varint(data: &[u8], pos: &mut usize) -> Option<u64> {
@@ -360,6 +370,29 @@ fn graph<S: ByteSource>(s: &mut Stream<S>, end: u64) -> Result<Graph, String> {
                 } else {
                     infos.push(data);
                 }
+            }
+            1 => {
+                // a node too big to buffer (a Constant holding a large tensor): keep its inputs, outputs, name and
+                // op type, skip its attributes
+                let (end, mut small) = (s.pos + n, Vec::new());
+                while s.pos < end {
+                    let tag = s.varint()?;
+                    if tag & 7 != 2 {
+                        s.skip(tag & 7)?;
+                        continue;
+                    }
+                    let len = s.varint()?;
+                    if (1..=4).contains(&(tag >> 3)) {
+                        for v in [tag, len] {
+                            put_varint(&mut small, v);
+                        }
+                        small.extend(s.bytes(len)?);
+                    } else {
+                        s.pos += len;
+                    }
+                }
+                let node = node(&mut g, &small);
+                g.nodes.push(node);
             }
             _ => s.pos += n,
         }
