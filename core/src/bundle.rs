@@ -52,10 +52,26 @@ fn graph(v: &Value) -> Graph {
     g
 }
 
+/// Say what a JSON file that is not a bundle probably is: people drop the JSON files of a Hugging Face repo.
+fn not_a_bundle(b: &Value) -> String {
+    let what = if b.get("_diffusers_version").is_some() {
+        "a diffusers pipeline index: each component (unet, vae, text_encoder) is a separate model, open its .onnx or .xml"
+    } else if b.get("weight_map").is_some() {
+        "a weights index: it lists weight files, not a graph"
+    } else if b.get("model_type").is_some() || b.get("architectures").is_some() {
+        "a Hugging Face model config: it describes the architecture but holds no graph"
+    } else if b.get("model").is_some() && b.get("added_tokens").is_some() {
+        "a tokenizer"
+    } else {
+        "not an afterpass bundle"
+    };
+    format!("{what}. afterpass opens an ONNX model (.onnx), an OpenVINO IR (.xml with its .bin), or a bundle from afterpass capture")
+}
+
 pub fn parse(json: &[u8]) -> Result<Model, String> {
     let b: Value = serde_json::from_slice(json).map_err(|e| format!("bundle JSON: {e}"))?;
     if b["format"] != "afterpass-bundle" {
-        return Err("not an afterpass bundle".into());
+        return Err(not_a_bundle(&b));
     }
     if b["schema_version"] != 0 {
         return Err(format!("unsupported bundle schema version {}", b["schema_version"]));

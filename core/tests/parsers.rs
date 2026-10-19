@@ -255,6 +255,11 @@ fn bad_inputs_are_errors_not_panics() {
         }
     }
     assert!(panics.is_empty(), "panicked on {panics:?}");
+    // the JSON files of a Hugging Face repo are named for what they are
+    let config = bundle::parse(br#"{"architectures": ["LlamaForCausalLM"], "model_type": "llama"}"#).err().unwrap();
+    assert!(config.starts_with("a Hugging Face model config"), "{config}");
+    let pipeline = bundle::parse(br#"{"_class_name": "StableDiffusionPipeline", "_diffusers_version": "0.30.0"}"#).err().unwrap();
+    assert!(pipeline.starts_with("a diffusers pipeline index"), "{pipeline}");
     assert!(empty.is_empty(), "loaded without nodes: {empty:?}");
 }
 
