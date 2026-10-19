@@ -79,3 +79,36 @@ def test_tensorrt_metadata_claims():
     assert trt._claims("[ONNX Layer: /conv1/Conv]\x1e[ONNX Layer: /relu/Relu]") == ["/conv1/Conv", "/relu/Relu"]
     assert trt._claims("[ONNX Layer: a]\x1f[ONNX Layer: b]") == ["a", "b"]
     assert trt._claims("") == []
+
+
+@pytest.fixture(scope="module")
+def stateful(tmp_path_factory):
+    """A KV-cache-like state that grows by the new tokens on every call, saved as an IR like an optimum-intel LLM."""
+    import openvino as ov
+    import openvino.opset13 as ops
+    ids = ops.parameter([1, -1], ov.Type.i64, name="input_ids")
+    mask = ops.parameter([1, -1], ov.Type.i64, name="attention_mask")
+    info = ov.op.util.VariableInfo()
+    info.data_shape, info.data_type, info.variable_id = ov.PartialShape([1, -1]), ov.Type.f32, "cache"
+    var = ov.op.util.Variable(info)
+    past = ops.read_value(ops.broadcast(ops.constant(np.float32(0)), ops.constant(np.array([1, 0], "int64"))), var)
+    cache = ops.concat([past, ops.convert(ids, ov.Type.f32)], 1)
+    axis = ops.constant(np.array([1], "int64"))
+    out = ops.add(ops.reduce_sum(cache, axis, True), ops.convert(ops.reduce_sum(mask, axis, True), ov.Type.f32))
+    path = tmp_path_factory.mktemp("stateful") / "llm.xml"
+    ov.save_model(ov.Model([ops.result(out)], [ops.assign(cache, var)], [ids, mask], "llm"), path)
+    return path
+
+
+def test_openvino_decode(stateful, tiny):
+    out = stateful.parent / "decode.json.gz"
+    subprocess.run([sys.executable, "-m", "afterpass", "capture", str(stateful), "--runtime", "openvino", "--device", "CPU",
+                    "--shape", "input_ids=1,8", "--shape", "attention_mask=1,8", "--iterations", "2", "--warmup", "1",
+                    "--decode", "4", "-o", str(out)], check=True)
+    p = bundle.read(out)["profile"]
+    assert (p["phase"], p["prompt_tokens"], p["decode_steps"]) == ("decode", 8, 4)
+    assert p["latency"]["median"] > 0 and p["nodes"]
+    # a model without a KV cache has no decode phase
+    r = subprocess.run([sys.executable, "-m", "afterpass", "capture", str(tiny / "tiny.onnx"), "--runtime", "openvino",
+                        "--decode", "4", "-o", str(tiny / "x.json.gz")], capture_output=True, text=True)
+    assert r.returncode != 0 and "--decode needs a stateful LLM IR" in r.stderr

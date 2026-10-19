@@ -101,18 +101,25 @@ pub fn parse(json: &[u8]) -> Result<Model, String> {
         via: Via::parse(l["via"].as_str().unwrap_or("")),
     }).collect();
     let c = &b["compiled"];
+    let p = &b["profile"];
+    let phase = match p["phase"].as_str() {
+        Some("decode") => format!("decode, {} steps after a {}-token prompt", p["decode_steps"], p["prompt_tokens"]),
+        _ => String::new(),
+    };
     let version = s(&c["version"]).split('-').next().unwrap_or("").to_string();
     Ok(Model {
         source,
         compiled: Some(compiled),
         links,
-        label: format!("{} {} {} {}", s(&c["runtime"]), version, s(&c["device"]), s(&c["device_name"])).split_whitespace().collect::<Vec<_>>().join(" "),
+        label: format!("{} {} {} {} {}", s(&c["runtime"]), version, s(&c["device"]), s(&c["device_name"]), if phase.is_empty() { "" } else { "decode" })
+            .split_whitespace().collect::<Vec<_>>().join(" "),
         runtime: s(&c["runtime"]),
         device: s(&c["device"]),
         version,
         device_name: s(&c["device_name"]),
         captured: s(&b["created"]).chars().take(10).collect(),
         model_file: s(&b["capture"]["model"]),
+        phase,
         latency_us: b["profile"]["latency"]["median"].as_f64().map(|v| v as f32),
         latency_range: b["profile"]["latency"]["min"].as_f64().zip(b["profile"]["latency"]["max"].as_f64()).map(|(a, b)| (a as f32, b as f32)),
     })

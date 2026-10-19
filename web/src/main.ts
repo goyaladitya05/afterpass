@@ -329,7 +329,7 @@ function report(wasmBytes: number) {
 const short = (label: string) => label.split(" ").slice(0, 3).join(" ");
 
 /** What a bundle says about its capture (`Session.about`); empty for a source pane. */
-type About = { runtime?: string; version?: string; device?: string; device_name?: string; captured?: string; model?: string };
+type About = { runtime?: string; version?: string; device?: string; device_name?: string; captured?: string; model?: string; phase?: string };
 const RUNTIMES: Record<string, string> = { openvino: "OpenVINO", tensorrt: "TensorRT" };
 /** "Intel(R) Arc(TM) 140V GPU (16GB)" gives "Intel Arc 140V GPU (16GB)". */
 const tidy = (name: string) => name.replace(/\((R|TM)\)/g, "").replace(/\s+/g, " ").trim();
@@ -337,7 +337,8 @@ const tidy = (name: string) => name.replace(/\((R|TM)\)/g, "").replace(/\s+/g, "
 /** A compiled pane's title and first words of its header: who compiled it, for which device, and when. */
 function compiledBy(a: About): [string, string] {
   const device = a.device_name ? `on ${tidy(a.device_name)} (${a.device})` : `on ${a.device}`;
-  return [`compiled by ${RUNTIMES[a.runtime ?? ""] ?? a.runtime} ${a.version}`, `${device}${a.captured ? `, captured ${a.captured}` : ""}`];
+  const when = `${a.captured ? `, captured ${a.captured}` : ""}${a.phase ? `, ${a.phase}` : ""}`;
+  return [`compiled by ${RUNTIMES[a.runtime ?? ""] ?? a.runtime} ${a.version}`, `${device}${when}`];
 }
 
 const INSTALL = `uv tool install "git+https://github.com/goyaladitya05/afterpass#subdirectory=capture"`;

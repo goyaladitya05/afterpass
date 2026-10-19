@@ -535,6 +535,7 @@ pub struct Side {
     pub device_name: String,
     pub captured: String,
     pub model_file: String,
+    pub phase: String,
     pub latency_us: Option<f32>,
     pub latency_range: Option<(f32, f32)>,
     /// Source ops linked by structure rather than by name.

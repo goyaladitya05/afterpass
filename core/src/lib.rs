@@ -70,7 +70,7 @@ impl Session {
             let inferred = analysis::infer_structure(&s.panes[0], &s.panes[1], &mut links);
             s.links.push(links);
             s.sides.push(Side { label: m.label, runtime: m.runtime, device: m.device, version: m.version, device_name: m.device_name,
-                captured: m.captured, model_file: m.model_file, latency_us: m.latency_us, latency_range: m.latency_range, inferred, derived });
+                captured: m.captured, model_file: m.model_file, phase: m.phase, latency_us: m.latency_us, latency_range: m.latency_range, inferred, derived });
         }
         s
     }
@@ -159,7 +159,7 @@ impl Session {
     pub fn about(&self, pane: usize) -> String {
         self.side(pane).map_or("{}".into(), |s| serde_json::json!({
             "runtime": s.runtime, "version": s.version, "device": s.device, "device_name": s.device_name,
-            "captured": s.captured, "model": s.model_file,
+            "captured": s.captured, "model": s.model_file, "phase": s.phase,
         }).to_string())
     }
 

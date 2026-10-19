@@ -71,6 +71,12 @@ fn bundles() {
         assert!(["openvino", "tensorrt"].contains(&about["runtime"].as_str().unwrap()), "{about}");
         assert_eq!((about["model"].as_str(), about["captured"].as_str().map(str::len)), (Some("toy.onnx"), Some(10)), "{about}");
         assert_eq!(s.about(0), "{}");
+        // a decode capture says so in its label and header
+        let mut v: serde_json::Value = serde_json::from_slice(&gunzip(&fixture(f))).unwrap();
+        v["profile"]["phase"] = "decode".into();
+        (v["profile"]["decode_steps"], v["profile"]["prompt_tokens"]) = (32.into(), 128.into());
+        let d = Session::from_model(bundle::parse(&serde_json::to_vec(&v).unwrap()).unwrap());
+        assert!(d.label(1).ends_with(" decode") && d.about(1).contains("decode, 32 steps after a 128-token prompt"), "{}", d.about(1));
         let f = s.findings_json();
         assert!(f.iter().any(|x| x["section"] == "time"), "no time findings: {f:?}");
         assert!(f.iter().flat_map(|x| x["targets"].as_array().unwrap()).all(|t| t[0].as_u64().unwrap() < 2));

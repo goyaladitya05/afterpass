@@ -2,6 +2,7 @@
 
 import time
 
+import numpy as np
 import openvino as ov
 
 from .util import random_inputs, stats
@@ -62,7 +63,8 @@ def _graph(rt_model, entries, linker):
     return nodes, tensors, links, ids, bool(ops)
 
 
-def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker) -> dict:
+def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker, decode: int = 0) -> dict:
+    """Profile one prefill per run, or with `decode` > 0 the `decode` single-token steps that follow the prefill."""
     core = ov.Core()
     if device not in core.available_devices:
         raise SystemExit(f"OpenVINO device {device} not available (have {core.available_devices})")
@@ -70,7 +72,9 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     unknown = [n for n in shapes if not any(n in p.get_names() for p in model.inputs)]
     if unknown:
         raise SystemExit(f"--shape names no input: {unknown} (inputs: {[p.get_any_name() for p in model.inputs]})")
-    if shapes:
+    # a stateful LLM stays dynamic, as OpenVINO GenAI compiles it: one compiled graph serves prefill and decode,
+    # so the two phases can be compared kernel by kernel
+    if shapes and not model.get_sinks():
         try:
             model.reshape(shapes)
         except RuntimeError as e:  # stateful LLMs keep dynamic KV cache dims; compile dynamic, feed static shapes
@@ -90,6 +94,20 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     req = compiled.create_infer_request()
     # a stateful LLM keeps its KV cache between calls: reset it so every run is the same fresh prefill
     stateful = bool(req.query_state())
+    names = {s[0] for s in specs}
+    if decode and not (stateful and {"input_ids", "attention_mask"} <= names):
+        raise SystemExit("--decode needs a stateful LLM IR with input_ids and attention_mask inputs (an optimum-intel export)")
+    prompt = feeds["input_ids"].shape[1] if decode else 0
+
+    def step_feeds(i: int) -> dict:
+        """Decode step i: one new token at position prompt + i, attending to every earlier one."""
+        f = {"input_ids": np.zeros((1, 1), feeds["input_ids"].dtype),
+             "attention_mask": np.ones((1, prompt + i + 1), feeds["attention_mask"].dtype)}
+        if "position_ids" in names:
+            f["position_ids"] = np.full((1, 1), prompt + i, feeds["position_ids"].dtype)
+        if "beam_idx" in names:
+            f["beam_idx"] = feeds["beam_idx"]
+        return f
 
     def run() -> float:
         if stateful:
@@ -104,13 +122,34 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     def means() -> dict:
         return {p.node_name: p.real_time.total_seconds() * 1e6 for p in req.get_profiling_info() if p.status == p.Status.EXECUTED}
 
-    for _ in range(warmup):
-        run()
-    before = means() if warmup else {}
-    latencies = [run() for _ in range(iterations)]
-    entries = req.get_profiling_info()
-    per_node = {name: max(0.0, ((warmup + iterations) * m - warmup * before.get(name, m)) / iterations)
-                for name, m in means().items()}
+    if decode:
+        # Each run is a fresh prefill, then `decode` timed steps. The running means also count the prefills, so
+        # every decode window is bracketed: the window's total per node is n_after * mean_after - n_before *
+        # mean_before, where n counts every inference since compile.
+        done, totals, latencies = 0, {}, []
+        for it in range(warmup + iterations):
+            run()
+            done += 1
+            before = means() if it >= warmup else {}
+            for i in range(decode):
+                t = time.perf_counter()
+                req.infer(step_feeds(i))
+                if it >= warmup:
+                    latencies.append((time.perf_counter() - t) * 1e6)
+            done += decode
+            if it >= warmup:
+                for name, m in means().items():
+                    totals[name] = totals.get(name, 0.0) + done * m - (done - decode) * before.get(name, 0.0)
+        entries = req.get_profiling_info()
+        per_node = {name: max(0.0, total / (iterations * decode)) for name, total in totals.items()}
+    else:
+        for _ in range(warmup):
+            run()
+        before = means() if warmup else {}
+        latencies = [run() for _ in range(iterations)]
+        entries = req.get_profiling_info()
+        per_node = {name: max(0.0, ((warmup + iterations) * m - warmup * before.get(name, m)) / iterations)
+                    for name, m in means().items()}
 
     # The runtime model is a snapshot: execTimeMcs is only filled if taken after an inference.
     nodes, tensors, links, ids, topology = _graph(compiled.get_runtime_model(), entries, linker)
@@ -138,7 +177,9 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
                      "device_name": core.get_property(device, "FULL_DEVICE_NAME"),
                      "properties": props, "topology": topology, "nodes": nodes, "tensors": tensors},
         "profile": {
-            "unit": "us", "iterations": iterations, "warmup": warmup, "source": "get_profiling_info running means, mean per node over the timed runs",
+            "unit": "us", "iterations": iterations, "warmup": warmup,
+            "source": "get_profiling_info running means, mean per node over the timed " + ("decode steps" if decode else "runs"),
+            **({"phase": "decode", "prompt_tokens": prompt, "decode_steps": decode} if decode else {}),
             "latency": stats(latencies),
             "nodes": {str(ids[name]): t for name, t in per_node.items() if name in ids},
             "unmatched": {name: t for name, t in per_node.items() if name not in ids},

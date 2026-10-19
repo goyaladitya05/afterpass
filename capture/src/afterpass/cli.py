@@ -17,8 +17,8 @@ def _shape(text: str) -> tuple[str, list[int]]:
 def capture(args) -> None:
     t0 = time.perf_counter()
     model = Path(args.model)
-    if args.iterations < 1 or args.warmup < 0:
-        sys.exit("--iterations must be at least 1 and --warmup at least 0")
+    if args.iterations < 1 or args.warmup < 0 or args.decode < 0:
+        sys.exit("--iterations must be at least 1, --warmup and --decode at least 0")
     if not model.is_file():
         sys.exit(f"no such file: {model}")
     if model.suffix not in (".onnx", ".xml"):
@@ -28,6 +28,8 @@ def capture(args) -> None:
     if args.runtime == "openvino":
         from . import ov as runtime
     else:
+        if args.decode:
+            sys.exit("--decode is supported for openvino only")
         if not args.device.startswith("GPU"):
             sys.exit("tensorrt captures need --device GPU")
         try:
@@ -35,7 +37,8 @@ def capture(args) -> None:
         except ImportError as e:
             sys.exit(f"TensorRT is not available ({e}): install the extra, for example uv sync --extra tensorrt")
     try:
-        result = runtime.capture(model, args.device, shapes, args.iterations, args.warmup, Linker(src))
+        extra = {"decode": args.decode} if args.decode else {}
+        result = runtime.capture(model, args.device, shapes, args.iterations, args.warmup, Linker(src), **extra)
     except RuntimeError as e:
         sys.exit(f"{args.runtime} failed on {model.name}: {e}")
     meta = {
@@ -48,9 +51,11 @@ def capture(args) -> None:
         # file names only: a bundle is shared, local paths are not
         "command": f"capture {model.name} --runtime {args.runtime} --device {args.device}"
         + "".join(f" --shape {n}={','.join(map(str, d))}" for n, d in args.shape)
-        + f" --iterations {args.iterations} --warmup {args.warmup}",
+        + f" --iterations {args.iterations} --warmup {args.warmup}" + (f" --decode {args.decode}" if args.decode else ""),
     }
-    out = Path(args.output or f"{model.stem}.{args.runtime}-{args.device.lower()}.afterpass.json.gz")
+    phase = "-decode" if args.decode else ""
+    out = Path(args.output or f"{model.stem}.{args.runtime}-{args.device.lower()}{phase}.afterpass.json.gz")
+    out.parent.mkdir(parents=True, exist_ok=True)
     bundle.write(out, bundle.build(src, result, meta))
     print(f"wrote {out} ({out.stat().st_size} bytes) in {meta['capture_s']:.1f}s")
 
@@ -65,6 +70,8 @@ def main() -> None:
     c.add_argument("--shape", type=_shape, action="append", default=[], help="input shape override, name=d0,d1,...")
     c.add_argument("--iterations", type=int, default=50)
     c.add_argument("--warmup", type=int, default=5)
+    c.add_argument("--decode", type=int, default=0, metavar="N",
+                   help="stateful LLM IR: profile the N single-token steps after a prefill of the --shape input_ids length")
     c.add_argument("-o", "--output", help="bundle path")
     c.set_defaults(func=capture)
     args = p.parse_args()
