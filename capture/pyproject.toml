@@ -17,6 +17,9 @@ dependencies = [
 afterpass = "afterpass.cli:main"
 
 [project.optional-dependencies]
+onnxruntime = [
+    "onnxruntime>=1.31.0",
+]
 tensorrt = [
     "cuda-python>=12,<13",
     "tensorrt-cu12>=11.4.0.106",
@@ -35,6 +38,7 @@ corpus = [
     "ultralytics>=8.4.178",
 ]
 dev = [
+    "onnxruntime>=1.31.0",
     "pytest>=9.1.1",
 ]
 
