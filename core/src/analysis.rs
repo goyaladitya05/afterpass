@@ -25,8 +25,10 @@ pub fn data_path(p: &Pane, v: usize) -> bool {
 
 /// Kernels a runtime inserts to move or re-encode data. When they do claim source ops (58 of 598 in the corpus),
 /// those are always data movement: concats, reshapes, casts, splits, Q/DQ.
-/// ONNX Runtime adds ReorderInput and ReorderOutput around NCHWc kernels, and Casts around ops it has no kernel for.
-const MOVE_KERNELS: [&str; 8] = ["Reorder", "Reformat", "NoOp", "MemoryOutput", "DynamicQuantize", "ReorderInput", "ReorderOutput", "Cast"];
+/// ONNX Runtime adds ReorderInput and ReorderOutput around NCHWc kernels, Casts around ops it has no kernel for, and
+/// Memcpy nodes around nodes a GPU session leaves to the CPU.
+const MOVE_KERNELS: [&str; 10] = ["Reorder", "Reformat", "NoOp", "MemoryOutput", "DynamicQuantize", "ReorderInput", "ReorderOutput", "Cast",
+    "MemcpyToHost", "MemcpyFromHost"];
 const MOVE_OPS: [&str; 14] = ["Reshape", "Transpose", "Cast", "Convert", "Concat", "Split", "Squeeze", "Unsqueeze",
     "Flatten", "Identity", "QuantizeLinear", "DequantizeLinear", "Slice", "StridedSlice"];
 
