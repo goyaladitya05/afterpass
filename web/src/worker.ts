@@ -1,5 +1,5 @@
-// Hosts the wasm core. Files are read here: ONNX through ranged FileReaderSync reads (weights are skipped,
-// never copied), OpenVINO IR .xml whole, bundles through the browser's gzip DecompressionStream.
+// Hosts the wasm core. Files are read here: ONNX and TFLite through ranged FileReaderSync reads (weights are
+// skipped, never copied), OpenVINO IR .xml whole, bundles through the browser's gzip DecompressionStream.
 
 import init, { Session } from "../pkg/afterpass_core.js";
 import { STALE } from "./stale";
@@ -20,27 +20,30 @@ const wasm = init().catch((e) => {
 });
 
 /** The file's kind from its first bytes, since names are often changed: gzip or JSON is a bundle, XML an IR,
- * a protobuf starting with field 1 (ir_version) an ONNX model. */
+ * the identifier TFL3 at bytes 4..8 a TFLite flatbuffer, a protobuf starting with field 1 (ir_version) an ONNX
+ * model. TFLite goes first: its first byte is an offset, which can look like `<` or `{`. */
 async function open(file: File): Promise<Session> {
   const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
   const text = new TextDecoder().decode(head).trimStart();
+  const name = file.name.toLowerCase();
+  const ranged = () => {
+    const reader = new FileReaderSync();
+    return (offset: number, length: number) => new Uint8Array(reader.readAsArrayBuffer(file.slice(offset, offset + length)));
+  };
   try {
+    if (String.fromCharCode(...head.subarray(4, 8)) === "TFL3" || name.endsWith(".tflite")) return Session.load_tflite(ranged(), file.size);
     if (head[0] === 0x1f && head[1] === 0x8b) {
       const stream = file.stream().pipeThrough(new DecompressionStream("gzip"));
       return Session.load_bundle(new Uint8Array(await new Response(stream).arrayBuffer()));
     }
     if (text.startsWith("{")) return Session.load_bundle(new Uint8Array(await file.arrayBuffer()));
     if (text.startsWith("<")) return Session.load_ir(new Uint8Array(await file.arrayBuffer()));
-    if (head[0] === 0x08 || file.name.toLowerCase().endsWith(".onnx")) {
-      const reader = new FileReaderSync();
-      const read = (offset: number, length: number) => new Uint8Array(reader.readAsArrayBuffer(file.slice(offset, offset + length)));
-      return Session.load_onnx(read, file.size);
-    }
+    if (head[0] === 0x08 || name.endsWith(".onnx")) return Session.load_onnx(ranged(), file.size);
   } catch (e) {
     throw new Error(`${file.name}: ${e instanceof Error ? e.message : e}`);
   }
-  if (file.name.toLowerCase().endsWith(".bin")) throw new Error(`${file.name} holds OpenVINO weights only: open the .xml next to it`);
-  throw new Error(`${file.name}: not an ONNX model, OpenVINO IR .xml or afterpass bundle`);
+  if (name.endsWith(".bin")) throw new Error(`${file.name} holds OpenVINO weights only: open the .xml next to it`);
+  throw new Error(`${file.name}: not an ONNX or TFLite model, OpenVINO IR .xml or afterpass bundle`);
 }
 
 function scene(pane: number) {

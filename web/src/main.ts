@@ -353,14 +353,24 @@ function showUncompiled(file: string | null) {
     copy.addEventListener("click", () => navigator.clipboard.writeText(text).then(() => (copy.textContent = "copied"), () => undefined));
     return h("div", { class: "command" }, h("code", {}, text), copy);
   };
-  const capture = (runtime: string, device: string) => command(`afterpass capture ${file} --runtime ${runtime} --device ${device}`);
+  const capture = (model: string, runtime: string, device: string) => command(`afterpass capture ${model} --runtime ${runtime} --device ${device}`);
+  const name = file.toLowerCase();
+  // capture reads ONNX and IR only; OpenVINO's converter turns a TFLite model into an IR it can read
+  const tflite = name.endsWith(".tflite") ? file.slice(0, -".tflite".length) + ".xml" : null;
   el.open = false;
   el.replaceChildren(
     h("summary", {}, "not compiled: see what a compiler does to it"),
     h("p", {}, "Nothing has compiled this model. This page only reads files; a compiled graph comes from running the model through a runtime on real hardware, with afterpass capture."),
-    h("p", {}, "To see what OpenVINO does to it, on a machine with an Intel CPU, GPU or NPU:"),
-    capture("openvino", "CPU"),
-    ...(file.toLowerCase().endsWith(".xml") ? [] : [h("p", {}, "To see what TensorRT does to it, on a machine with an NVIDIA GPU:"), capture("tensorrt", "GPU")]),
+    ...(tflite ? [
+      h("p", {}, "afterpass capture reads ONNX models and OpenVINO IR, not TFLite. OpenVINO reads TFLite: to see what it does to this model, on a machine with an Intel CPU, GPU or NPU, convert it to an IR with ovc (installed with the openvino package) and capture the .xml it writes:"),
+      command(`ovc ${file}`),
+      capture(tflite, "openvino", "CPU"),
+      h("p", {}, "The bundle's source graph is then that IR, not this file. TensorRT reads ONNX models only."),
+    ] : [
+      h("p", {}, "To see what OpenVINO does to it, on a machine with an Intel CPU, GPU or NPU:"),
+      capture(file, "openvino", "CPU"),
+      ...(name.endsWith(".xml") ? [] : [h("p", {}, "To see what TensorRT does to it, on a machine with an NVIDIA GPU:"), capture(file, "tensorrt", "GPU")]),
+    ]),
     h("p", {}, "Then open the .afterpass.json.gz it writes. Install the capture tool once with:"),
     command(INSTALL),
   );

@@ -16,7 +16,7 @@ Runtimes: OpenVINO (CPU, GPU, NPU) and TensorRT (10 and 11).
 
 The viewer is a static web page. Everything runs in your browser; nothing is uploaded, and the page's Content Security Policy forbids it from sending data anywhere. It reads files and never compiles anything: a compiled graph always comes from `afterpass capture`, run on a machine with the runtime and the hardware. Drop in one of these:
 
-* an ONNX model or an OpenVINO IR `.xml`, to browse its graph;
+* an ONNX or TFLite model, or an OpenVINO IR `.xml`, to browse its graph;
 * a bundle from `afterpass capture` (below), to see the compiled graph, provenance and timing;
 * two bundles of the same model, to compare runtimes, devices or versions.
 
@@ -31,6 +31,8 @@ uv tool install "git+https://github.com/goyaladitya05/afterpass#subdirectory=cap
 afterpass capture model.onnx --runtime openvino --device CPU
 afterpass capture model.onnx --runtime tensorrt --device GPU     # needs the tensorrt extra, see below
 ```
+
+Capture reads ONNX models and OpenVINO IR. For a TFLite model, convert it first with OpenVINO's `ovc model.tflite`, which writes `model.xml`, and capture that.
 
 For TensorRT, install with the extra: `uv tool install "afterpass[tensorrt] @ git+https://github.com/goyaladitya05/afterpass#subdirectory=capture"`.
 
