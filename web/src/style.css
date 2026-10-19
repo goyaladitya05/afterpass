@@ -146,7 +146,7 @@ select, input[type="search"] {
 .findings li:hover { background: var(--bg); }
 .findings li.warn { border-left-color: var(--warn); }
 .findings li.idle { cursor: default; }
-.findings .t { font: var(--fs-sm) var(--font-mono); display: flex; justify-content: space-between; gap: var(--space-2); }
+.findings .t { font: var(--fs-sm) var(--font-mono); display: flex; justify-content: space-between; gap: var(--space-2); overflow-wrap: anywhere; }
 .findings .t em { font-style: normal; color: var(--text-faint); font-size: var(--fs-xs); }
 .findings .d { color: var(--text-muted); font-size: var(--fs-xs); line-height: var(--lh-snug); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .findings .none { padding: var(--space-3); color: var(--text-faint); }
