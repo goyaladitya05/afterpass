@@ -932,7 +932,7 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
     let coverage: Vec<String> = (0..2).filter(|&side| profiled[side] > 0.0).map(|side| match lat[side] {
         // kernel times are means and latency a median, so a few slow runs alone can push the sum past 100%
         Some(l) if profiled[side] > l * 1.05 => format!("{} kernel times sum to {:.0}% of latency: they are means over the runs, latency is the median, and profiling adds overhead per kernel{}",
-            name[side], 100.0 * profiled[side] / l, if sides[side].device.starts_with("GPU") { " and serialises GPU kernels" } else { "" }),
+            name[side], 100.0 * profiled[side] / l, if sides[side].device.starts_with("GPU") || matches!(sides[side].device.as_str(), "CUDA" | "TensorRT") { " and serialises GPU kernels" } else { "" }),
         Some(l) => format!("{} kernel times cover {:.0}% of latency", name[side], 100.0 * profiled[side] / l),
         None => format!("{} kernel times sum to {}", name[side], fmt_us(profiled[side])),
     }).collect();
