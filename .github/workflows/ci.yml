@@ -14,6 +14,8 @@ jobs:
       - uses: actions/checkout@v7
       - run: cargo test --release
         working-directory: core
+      - run: cargo test --release --features cli
+        working-directory: core
 
   capture:
     runs-on: ubuntu-latest

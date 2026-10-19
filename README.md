@@ -45,6 +45,28 @@ A bundle is gzip JSON, typically 20 to 350 KB. It holds:
 * the provenance links;
 * the machine description.
 
+## Check for regressions in CI
+
+`afterpass-diff` compares two bundles of the same model (the viewer's compare mode, as text) and can fail a build:
+
+```
+cargo install --git https://github.com/goyaladitya05/afterpass afterpass-core --features cli
+afterpass-diff baseline.afterpass.json.gz new.afterpass.json.gz --max-slower 10 --fail-on-lost-fusion
+```
+
+* `--max-slower PCT` fails (exit 1) when the second bundle's median latency is more than PCT% above the first's, unless the gap is run-to-run noise: the second bundle's fastest run is no slower than the first's median.
+* `--fail-on-lost-fusion` fails when the second bundle runs more kernels than the first for some region of source ops.
+* `--json` prints the findings and the gate results as JSON.
+* Exit 2 means a usage or input error (one line on stderr naming the file).
+
+A GitHub Actions step, after your job has captured `new.afterpass.json.gz` and fetched the baseline:
+
+```
+- run: |
+    cargo install --git https://github.com/goyaladitya05/afterpass afterpass-core --features cli
+    afterpass-diff baseline.afterpass.json.gz new.afterpass.json.gz --max-slower 10 --fail-on-lost-fusion
+```
+
 ## How sure is a link?
 
 Every link from a compiled kernel to a source op has a grade:
@@ -58,6 +80,7 @@ Inferred links are never shown as certain. When several neighbouring kernels hav
 
 ```
 cd core && cargo test --release                     # Rust core: parsers, collapsing, layout, analysis
+cd core && cargo test --release --features cli      # also the afterpass-diff tests
 cd web && npm ci && npm run wasm && npm run build   # needs wasm-pack and the wasm32-unknown-unknown target
 cd web && npx vite preview                          # serve the built site
 cd capture && uv run --group dev pytest tests       # capture CLI tests (OpenVINO CPU)
