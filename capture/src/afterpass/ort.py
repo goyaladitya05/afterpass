@@ -187,7 +187,7 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
                      "properties": {"providers": [provider], "graph_optimization_level": "ORT_ENABLE_ALL"},
                      "topology": True, "nodes": nodes, "tensors": tensors},
         "profile": {
-            "unit": "us", "iterations": iterations, "warmup": warmup, "source": "enable_profiling trace, mean per node over the timed runs",
+            "unit": "us", "iterations": iterations, "warmup": warmup, "source": "enable_profiling trace, mean per node over the timed runs; latency from the same profiled runs",
             "latency": stats(latencies),
             "nodes": {str(ids[name]): t for name, t in per_node.items() if name in ids},
             "unmatched": {name: t for name, t in per_node.items() if name not in ids},
