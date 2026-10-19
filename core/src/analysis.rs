@@ -543,6 +543,11 @@ pub struct Side {
     pub derived: usize,
 }
 
+/// True when the slower side's fastest run is no slower than the faster side's median: the gap is run-to-run noise.
+pub fn within_noise(slow: &Side, fast: &Side) -> bool {
+    matches!((slow.latency_range, fast.latency_us), (Some((lo, _)), Some(median)) if lo <= median)
+}
+
 const QDQ: [&str; 3] = ["QuantizeLinear", "DequantizeLinear", "FakeQuantize"];
 
 /// `op x3, Mul, Softmax x2`: counts of a list of names, most common first. Quantize and dequantize ops, which
@@ -896,9 +901,8 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
     if let (Some(la), Some(lb)) = (lat[0], lat[1]) {
         let (slow, fast, ratio) = if la >= lb { ("A", "B", la / lb) } else { ("B", "A", lb / la) };
         let mut verdict = if ratio < 1.02 { "Within 2% of each other".to_string() } else { format!("{slow} takes {ratio:.2}x as long as {fast}") };
-        // the slower side's fastest run is no slower than the faster side's median: the gap is run-to-run noise
         let (si, fi) = if slow == "A" { (0, 1) } else { (1, 0) };
-        if ratio >= 1.02 && sides[si].latency_range.is_some_and(|(lo, _)| lo <= lat[fi].unwrap_or(0.0)) {
+        if ratio >= 1.02 && within_noise(&sides[si], &sides[fi]) {
             verdict += ", within run-to-run noise (its fastest run beats the other's median)";
         }
         let hardware = |side: usize| sides[side].label.strip_prefix(&format!("{} {} ", sides[side].runtime, sides[side].version)).unwrap_or(&sides[side].label).to_string();
@@ -916,8 +920,11 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
         Some(l) => format!("{} kernel times cover {:.0}% of latency", name[side], 100.0 * profiled[side] / l),
         None => format!("{} kernel times sum to {}", name[side], fmt_us(profiled[side])),
     }).collect();
-    out.push(item("summary", "info", format!("kernels  A {}, B {}", kernels[0], kernels[1]),
-        format!("{} regions of source ops compared ({} distinct after folding repeated layers). {}", aggs.iter().map(|a| a.regions.len()).sum::<usize>(), aggs.len(), coverage.join("; ")), vec![]));
+    let mut kernels_item = item("summary", "info", format!("kernels  A {}, B {}", kernels[0], kernels[1]),
+        format!("{} regions of source ops compared ({} distinct after folding repeated layers). {}", aggs.iter().map(|a| a.regions.len()).sum::<usize>(), aggs.len(), coverage.join("; ")), vec![]);
+    // regions where B runs more kernels than A did: a fusion A had and B lost (counted before the fusion list is truncated)
+    kernels_item["lost_fusions"] = aggs.iter().filter(|a| regions[a.regions[0]].k[1].len() > regions[a.regions[0]].k[0].len()).map(|a| a.regions.len()).sum::<usize>().into();
+    out.push(kernels_item);
     if orphan[0].0 + orphan[1].0 > 0 {
         out.push(item("summary", "info", format!("unlinked kernels  A {}, B {}", orphan[0].0, orphan[1].0),
             format!("kernels with no source op are left out of the comparison: A {}, B {}", fmt_us(orphan[0].1), fmt_us(orphan[1].1)), vec![]));

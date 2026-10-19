@@ -76,7 +76,7 @@ impl Session {
     }
 
     /// The capture behind a compiled pane; None for the source pane.
-    fn side(&self, pane: usize) -> Option<&Side> {
+    pub fn side(&self, pane: usize) -> Option<&Side> {
         pane.checked_sub(1).and_then(|c| self.sides.get(c))
     }
 
