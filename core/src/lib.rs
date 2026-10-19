@@ -7,6 +7,7 @@ pub mod ir;
 pub mod layout;
 pub mod onnx;
 pub mod ovir;
+pub mod tflite;
 pub mod view;
 
 use js_sys::{Float32Array, Function, Object, Reflect, Uint16Array, Uint32Array, Uint8Array};
@@ -133,6 +134,12 @@ impl Session {
     pub fn load_onnx(read: Function, len: f64) -> Result<Session, JsError> {
         let mut src = JsSource { read, len: len as u64 };
         let g = onnx::parse(&mut src).map_err(|e| JsError::new(&e))?;
+        Ok(Session::from_model(Model { source: g, ..Default::default() }))
+    }
+
+    pub fn load_tflite(read: Function, len: f64) -> Result<Session, JsError> {
+        let mut src = JsSource { read, len: len as u64 };
+        let g = tflite::parse(&mut src).map_err(|e| JsError::new(&e))?;
         Ok(Session::from_model(Model { source: g, ..Default::default() }))
     }
 

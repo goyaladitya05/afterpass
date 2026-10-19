@@ -588,6 +588,7 @@ fn dtype_bits(dtype: &str) -> Option<u64> {
         "float16" | "f16" | "bfloat16" | "bf16" | "int16" | "i16" | "uint16" | "u16" => 16,
         "int8" | "i8" | "uint8" | "u8" | "bool" | "boolean" | "float8e4m3fn" | "float8e5m2" | "f8e4m3" | "f8e5m2" => 8,
         "int4" | "i4" | "uint4" | "u4" | "nf4" | "float4e2m1" => 4,
+        "int2" => 2,
         _ => return None,
     })
 }
