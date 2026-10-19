@@ -65,7 +65,8 @@ fn not_a_bundle(b: &Value) -> String {
     } else {
         "not an afterpass bundle"
     };
-    format!("{what}. afterpass opens an ONNX model (.onnx), an OpenVINO IR (.xml with its .bin), or a bundle from afterpass capture")
+    format!("{what}. afterpass opens a model (.onnx, OpenVINO IR .xml, .tflite; weights are never read, so an IR's .bin is not needed), \
+        a bundle from afterpass capture, or a model with the exec.xml benchmark_app writes")
 }
 
 pub fn parse(json: &[u8]) -> Result<Model, String> {
