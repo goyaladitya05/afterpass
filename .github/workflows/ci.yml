@@ -1,12 +1,10 @@
 name: ci
 
-# Tests and the site build on every push; the site deploys to GitHub Pages only on a published release or by hand.
+# Tests and the site build on every push and pull request; a push to main that passes them deploys to GitHub Pages.
 on:
   push:
     branches: [main]
   pull_request:
-  release:
-    types: [published]
   workflow_dispatch:
 
 jobs:
@@ -48,8 +46,9 @@ jobs:
           path: web/dist
 
   deploy:
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     needs: [core, capture, web]
+    concurrency: pages
     runs-on: ubuntu-latest
     permissions:
       pages: write
