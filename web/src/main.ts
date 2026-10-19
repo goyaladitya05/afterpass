@@ -330,7 +330,7 @@ const short = (label: string) => label.split(" ").slice(0, 3).join(" ");
 
 /** What a bundle says about its capture (`Session.about`); empty for a source pane. */
 type About = { runtime?: string; version?: string; device?: string; device_name?: string; captured?: string; model?: string; phase?: string };
-const RUNTIMES: Record<string, string> = { openvino: "OpenVINO", tensorrt: "TensorRT" };
+const RUNTIMES: Record<string, string> = { openvino: "OpenVINO", tensorrt: "TensorRT", onnxruntime: "ONNX Runtime" };
 /** "Intel(R) Arc(TM) 140V GPU (16GB)" gives "Intel Arc 140V GPU (16GB)". */
 const tidy = (name: string) => name.replace(/\((R|TM)\)/g, "").replace(/\s+/g, " ").trim();
 
@@ -369,7 +369,8 @@ function showUncompiled(file: string | null) {
     ] : [
       h("p", {}, "To see what OpenVINO does to it, on a machine with an Intel CPU, GPU or NPU:"),
       capture(file, "openvino", "CPU"),
-      ...(name.endsWith(".xml") ? [] : [h("p", {}, "To see what TensorRT does to it, on a machine with an NVIDIA GPU:"), capture(file, "tensorrt", "GPU")]),
+      ...(name.endsWith(".xml") ? [] : [h("p", {}, "To see what TensorRT does to it, on a machine with an NVIDIA GPU:"), capture(file, "tensorrt", "GPU"),
+        h("p", {}, "To see what ONNX Runtime does to it on a CPU (install the tool below with --with onnxruntime):"), capture(file, "onnxruntime", "CPU")]),
     ]),
     h("p", {}, "Then open the .afterpass.json.gz it writes. Install the capture tool once with:"),
     command(INSTALL),
