@@ -1,0 +1,447 @@
+<?xml version="1.0"?>
+<net name="onnx_Frontend_IR" version="11">
+	<layers>
+		<layer id="0" name="ids" type="Input">
+			<data shape="1,8" element_type="i64" execOrder="1" execTimeMcs="not_executed" originalLayersNames="ids" outputLayouts="ab" outputPrecisions="i64" primitiveType="unknown_i64" runtimePrecision="i64" />
+			<output>
+				<port id="0" precision="I64">
+					<dim>1</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="1" name="embed.weight" type="Const">
+			<data execOrder="0" execTimeMcs="not_executed" originalLayersNames="embed.weight" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>32</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="2" name="Convert_3966" type="Convert">
+			<data execOrder="2" execTimeMcs="4" originalLayersNames="Convert_3966" outputLayouts="ab" outputPrecisions="i32" primitiveType="ref_i64" runtimePrecision="i64" />
+			<input>
+				<port id="0" precision="I64">
+					<dim>1</dim>
+					<dim>8</dim>
+				</port>
+			</input>
+			<output>
+				<port id="1" precision="I32">
+					<dim>1</dim>
+					<dim>8</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="3" name="Constant_3" type="Const">
+			<data execOrder="3" execTimeMcs="not_executed" originalLayersNames="Constant_3" outputLayouts="a" outputPrecisions="i32" primitiveType="unknown_i32" runtimePrecision="i32" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>1</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="4" name="/embed/Gather" type="Gather">
+			<data execOrder="4" execTimeMcs="not_executed" originalLayersNames="/embed/Gather" outputLayouts="abc" outputPrecisions="f32" primitiveType="ref_any_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>32</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>1</dim>
+					<dim>8</dim>
+				</port>
+				<port id="2" precision="I32">
+					<dim>1</dim>
+				</port>
+			</input>
+			<output>
+				<port id="3" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="5" name="layers.0.w" type="Const">
+			<data execOrder="5" execTimeMcs="not_executed" originalLayersNames="layers.0.w" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="6" name="Constant_5703" type="Const">
+			<data execOrder="6" execTimeMcs="not_executed" originalLayersNames="Constant_5703" outputLayouts="a" outputPrecisions="i32" primitiveType="unknown_i32" runtimePrecision="i32" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>2</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="7" name="/model/layers.0/fc/MatMul/transpose_b" type="Transpose">
+			<data execOrder="7" execTimeMcs="not_executed" originalLayersNames="/model/layers.0/fc/MatMul/transpose_b" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>2</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="8" name="Constant_5725" type="Const">
+			<data execOrder="8" execTimeMcs="not_executed" originalLayersNames="Constant_5725" outputLayouts="a" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="9" name="/model/layers.0/fc/Add" type="FullyConnected">
+			<data execOrder="9" execTimeMcs="9" originalLayersNames="/model/layers.0/fc/Add,/model/layers.0/act/Relu" outputLayouts="abc" outputPrecisions="f32" primitiveType="brgemm_avx2_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+				<port id="2" precision="FP32">
+					<dim>16</dim>
+				</port>
+			</input>
+			<output>
+				<port id="3" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="10" name="/model/layers.0/Add" type="Subgraph">
+			<data execOrder="10" execTimeMcs="1" originalLayersNames="/model/layers.0/Add" outputLayouts="abc" outputPrecisions="f32" primitiveType="jit_avx2_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="11" name="layers.1.w" type="Const">
+			<data execOrder="11" execTimeMcs="not_executed" originalLayersNames="layers.1.w" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="12" name="Constant_5708" type="Const">
+			<data execOrder="12" execTimeMcs="not_executed" originalLayersNames="Constant_5708" outputLayouts="a" outputPrecisions="i32" primitiveType="unknown_i32" runtimePrecision="i32" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>2</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="13" name="/model/layers.1/fc/MatMul/transpose_b" type="Transpose">
+			<data execOrder="13" execTimeMcs="not_executed" originalLayersNames="/model/layers.1/fc/MatMul/transpose_b" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>2</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="14" name="Constant_5730" type="Const">
+			<data execOrder="14" execTimeMcs="not_executed" originalLayersNames="Constant_5730" outputLayouts="a" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="15" name="/model/layers.1/fc/Add" type="FullyConnected">
+			<data execOrder="15" execTimeMcs="16" originalLayersNames="/model/layers.1/fc/Add,/model/layers.1/act/Relu" outputLayouts="abc" outputPrecisions="f32" primitiveType="brgemm_avx2_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+				<port id="2" precision="FP32">
+					<dim>16</dim>
+				</port>
+			</input>
+			<output>
+				<port id="3" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="16" name="/model/layers.1/Add" type="Subgraph">
+			<data execOrder="16" execTimeMcs="not_executed" originalLayersNames="/model/layers.1/Add" outputLayouts="abc" outputPrecisions="f32" primitiveType="jit_avx2_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="17" name="layers.2.w" type="Const">
+			<data execOrder="17" execTimeMcs="not_executed" originalLayersNames="layers.2.w" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="18" name="Constant_5713" type="Const">
+			<data execOrder="18" execTimeMcs="not_executed" originalLayersNames="Constant_5713" outputLayouts="a" outputPrecisions="i32" primitiveType="unknown_i32" runtimePrecision="i32" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>2</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="19" name="/model/layers.2/fc/MatMul/transpose_b" type="Transpose">
+			<data execOrder="19" execTimeMcs="not_executed" originalLayersNames="/model/layers.2/fc/MatMul/transpose_b" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>2</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="20" name="Constant_5735" type="Const">
+			<data execOrder="20" execTimeMcs="not_executed" originalLayersNames="Constant_5735" outputLayouts="a" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="21" name="/model/layers.2/fc/Add" type="FullyConnected">
+			<data execOrder="21" execTimeMcs="4" originalLayersNames="/model/layers.2/fc/Add,/model/layers.2/act/Relu" outputLayouts="abc" outputPrecisions="f32" primitiveType="brgemm_avx2_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="FP32">
+					<dim>16</dim>
+					<dim>16</dim>
+				</port>
+				<port id="2" precision="FP32">
+					<dim>16</dim>
+				</port>
+			</input>
+			<output>
+				<port id="3" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="22" name="/model/layers.2/Add" type="Subgraph">
+			<data execOrder="22" execTimeMcs="not_executed" originalLayersNames="/model/layers.2/act/Mul,/model/layers.2/Add" outputLayouts="abc" outputPrecisions="f32" primitiveType="jit_avx2_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="23" name="head.weight" type="Const">
+			<data execOrder="23" execTimeMcs="not_executed" originalLayersNames="head.weight" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<output>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>4</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="24" name="Constant_5718" type="Const">
+			<data execOrder="24" execTimeMcs="not_executed" originalLayersNames="Constant_5718" outputLayouts="a" outputPrecisions="i32" primitiveType="unknown_i32" runtimePrecision="i32" />
+			<output>
+				<port id="0" precision="I32">
+					<dim>2</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="25" name="logits/transpose_b" type="Transpose">
+			<data execOrder="25" execTimeMcs="not_executed" originalLayersNames="logits/transpose_b" outputLayouts="ab" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>16</dim>
+					<dim>4</dim>
+				</port>
+				<port id="1" precision="I32">
+					<dim>2</dim>
+				</port>
+			</input>
+			<output>
+				<port id="2" precision="FP32">
+					<dim>4</dim>
+					<dim>16</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="26" name="Constant_5720" type="Const">
+			<data execOrder="26" execTimeMcs="not_executed" originalLayersNames="Constant_5720" outputLayouts="a" outputPrecisions="dynamic" primitiveType="unknown_dynamic" runtimePrecision="dynamic" />
+			<output>
+				<port id="0" precision="UNSPECIFIED">
+					<dim>0</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="27" name="logits" type="FullyConnected">
+			<data execOrder="27" execTimeMcs="5" originalLayersNames="logits" outputLayouts="abc" outputPrecisions="f32" primitiveType="gemm_mlas_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>16</dim>
+				</port>
+				<port id="1" precision="FP32">
+					<dim>4</dim>
+					<dim>16</dim>
+				</port>
+				<port id="2" precision="UNSPECIFIED">
+					<dim>0</dim>
+				</port>
+			</input>
+			<output>
+				<port id="3" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>4</dim>
+				</port>
+			</output>
+		</layer>
+		<layer id="28" name="logits/sink_port_0" type="Output">
+			<data execOrder="28" execTimeMcs="not_executed" originalLayersNames="logits/sink_port_0" outputLayouts="undef" outputPrecisions="f32" primitiveType="unknown_f32" runtimePrecision="f32" />
+			<input>
+				<port id="0" precision="FP32">
+					<dim>1</dim>
+					<dim>8</dim>
+					<dim>4</dim>
+				</port>
+			</input>
+		</layer>
+	</layers>
+	<edges>
+		<edge from-layer="0" from-port="0" to-layer="2" to-port="0" />
+		<edge from-layer="1" from-port="0" to-layer="4" to-port="0" />
+		<edge from-layer="2" from-port="1" to-layer="4" to-port="1" />
+		<edge from-layer="3" from-port="0" to-layer="4" to-port="2" />
+		<edge from-layer="4" from-port="3" to-layer="9" to-port="0" />
+		<edge from-layer="4" from-port="3" to-layer="10" to-port="0" />
+		<edge from-layer="5" from-port="0" to-layer="7" to-port="0" />
+		<edge from-layer="6" from-port="0" to-layer="7" to-port="1" />
+		<edge from-layer="7" from-port="2" to-layer="9" to-port="1" />
+		<edge from-layer="8" from-port="0" to-layer="9" to-port="2" />
+		<edge from-layer="9" from-port="3" to-layer="10" to-port="1" />
+		<edge from-layer="10" from-port="2" to-layer="15" to-port="0" />
+		<edge from-layer="10" from-port="2" to-layer="16" to-port="0" />
+		<edge from-layer="11" from-port="0" to-layer="13" to-port="0" />
+		<edge from-layer="12" from-port="0" to-layer="13" to-port="1" />
+		<edge from-layer="13" from-port="2" to-layer="15" to-port="1" />
+		<edge from-layer="14" from-port="0" to-layer="15" to-port="2" />
+		<edge from-layer="15" from-port="3" to-layer="16" to-port="1" />
+		<edge from-layer="16" from-port="2" to-layer="21" to-port="0" />
+		<edge from-layer="16" from-port="2" to-layer="22" to-port="0" />
+		<edge from-layer="17" from-port="0" to-layer="19" to-port="0" />
+		<edge from-layer="18" from-port="0" to-layer="19" to-port="1" />
+		<edge from-layer="19" from-port="2" to-layer="21" to-port="1" />
+		<edge from-layer="20" from-port="0" to-layer="21" to-port="2" />
+		<edge from-layer="21" from-port="3" to-layer="22" to-port="1" />
+		<edge from-layer="22" from-port="2" to-layer="27" to-port="0" />
+		<edge from-layer="23" from-port="0" to-layer="25" to-port="0" />
+		<edge from-layer="24" from-port="0" to-layer="25" to-port="1" />
+		<edge from-layer="25" from-port="2" to-layer="27" to-port="1" />
+		<edge from-layer="26" from-port="0" to-layer="27" to-port="2" />
+		<edge from-layer="27" from-port="3" to-layer="28" to-port="0" />
+	</edges>
+	<rt_info />
+</net>

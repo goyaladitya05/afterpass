@@ -6,6 +6,7 @@ pub mod hier;
 pub mod ir;
 pub mod layout;
 pub mod onnx;
+pub mod ovexec;
 pub mod ovir;
 pub mod provenance;
 pub mod tflite;
@@ -72,7 +73,7 @@ impl Session {
             let inferred = analysis::infer_structure(&s.panes[0], &s.panes[1], &mut links);
             s.links.push(links);
             s.sides.push(Side { label: m.label, runtime: m.runtime, device: m.device, version: m.version, device_name: m.device_name,
-                captured: m.captured, model_file: m.model_file, phase: m.phase, latency_us: m.latency_us, latency_range: m.latency_range, inferred, derived });
+                captured: m.captured, model_file: m.model_file, phase: m.phase, imported: m.imported, latency_us: m.latency_us, latency_range: m.latency_range, inferred, derived });
         }
         s
     }
@@ -97,6 +98,20 @@ impl Session {
 
     pub fn pane(&self, i: usize) -> &Pane {
         &self.panes[i]
+    }
+
+    /// Give a lone source graph the compiled graph of an OpenVINO execution graph (`benchmark_app
+    /// -exec_graph_path`), with latency from benchmark_app's statistics report when given. `model` is the source
+    /// file's name.
+    pub fn add_exec_graph(&mut self, xml: &[u8], report: Option<&[u8]>, model: &str) -> Result<(), String> {
+        if self.panes.len() != 1 {
+            return Err("an execution graph goes with the model it was compiled from (.onnx or OpenVINO IR .xml)".into());
+        }
+        let mut m = ovexec::import(&self.panes[0].graph, xml, report)?;
+        m.model_file = model.to_string();
+        m.source = std::mem::take(&mut self.panes[0].graph);
+        *self = Session::from_model(m);
+        Ok(())
     }
 
     /// Add `other`'s compiled graph as a third pane. Both must be captures of the same source graph.
@@ -129,7 +144,15 @@ impl Session {
 
     pub fn load_ir(xml: &[u8]) -> Result<Session, JsError> {
         let g = ovir::parse(xml).map_err(|e| JsError::new(&e))?;
+        if ovexec::is_exec_graph(&g) {
+            return Err(JsError::new("an OpenVINO execution graph (benchmark_app -exec_graph_path): open it together with the model it was compiled from"));
+        }
         Ok(Session::from_model(Model { source: g, ..Default::default() }))
+    }
+
+    /// See `add_exec_graph`; `report` is empty when there is none.
+    pub fn import_exec(&mut self, xml: &[u8], report: &[u8], model: &str) -> Result<(), JsError> {
+        self.add_exec_graph(xml, (!report.is_empty()).then_some(report), model).map_err(|e| JsError::new(&e))
     }
 
     pub fn load_onnx(read: Function, len: f64) -> Result<Session, JsError> {
@@ -162,12 +185,12 @@ impl Session {
         self.side(pane).map_or(String::new(), |s| s.label.clone())
     }
 
-    /// Who compiled a compiled pane, for its header: JSON with runtime, version, device, device_name, captured and
-    /// model; `{}` for a source pane.
+    /// Who compiled a compiled pane, for its header: JSON with runtime, version, device, device_name, captured,
+    /// model, phase and imported (the tool whose output was imported; empty for a bundle); `{}` for a source pane.
     pub fn about(&self, pane: usize) -> String {
         self.side(pane).map_or("{}".into(), |s| serde_json::json!({
             "runtime": s.runtime, "version": s.version, "device": s.device, "device_name": s.device_name,
-            "captured": s.captured, "model": s.model_file, "phase": s.phase,
+            "captured": s.captured, "model": s.model_file, "phase": s.phase, "imported": s.imported,
         }).to_string())
     }
 

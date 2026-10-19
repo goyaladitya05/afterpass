@@ -1,0 +1,32 @@
+Command line parameters
+-m;toy.onnx
+-d;CPU
+-hint;latency
+-niter;20
+-exec_graph_path;toy.exec.xml
+-report_type;no_counters
+-report_folder;.
+
+Configuration setup
+topology;Model1
+target device;CPU
+API;sync
+inference_only;True
+precision;UNSPECIFIED
+batch size;1
+number of iterations;20
+number of parallel infer requests;1
+duration (ms);0
+
+Execution results
+read model time (ms);3.26
+compile model time (ms);15.80
+first inference time (ms);1.13
+total execution time (ms);0.43
+total number of iterations;20
+latency (ms);0.01
+avg latency;0.02
+min latency;0.01
+max latency;0.05
+throughput;46750.82
+

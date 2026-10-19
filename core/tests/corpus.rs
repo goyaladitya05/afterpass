@@ -1,7 +1,7 @@
 //! Structure and timing on the real corpus (skipped when corpus/ is absent).
 //! cargo test --release --test corpus -- --nocapture
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Read;
 use std::time::Instant;
 
@@ -216,3 +216,49 @@ fn linker_matches_capture() {
     }
 }
 
+/// benchmark_app's execution graph and report against a capture of the same model on the same machine
+/// (corpus/import, written by the commands in docs/notes/18-import.md).
+#[test]
+fn exec_graph_import_vs_capture() {
+    for (model, dir) in [("resnet50/resnet50.onnx", "import/resnet50-cpu"), ("resnet50/resnet50.onnx", "import/resnet50-cpu-f32"),
+                         ("tinyllama-1.1b/tinyllama-1.1b.onnx", "import/tinyllama-cpu")] {
+        let (Some(src), Some(d)) = (corpus(model), corpus(dir)) else { continue };
+        let f = std::fs::File::open(&src).unwrap();
+        let len = f.metadata().unwrap().len();
+        let g = onnx::parse(&mut FileSource(f, len)).unwrap();
+        let mut imported = Session::from_model(Model { source: g, ..Default::default() });
+        let report = std::fs::read(d.join("benchmark_report.csv")).unwrap();
+        imported.add_exec_graph(&std::fs::read(d.join("exec.xml")).unwrap(), Some(&report), "model").unwrap();
+        let bundle_file = std::fs::read_dir(&d).unwrap().flatten().map(|e| e.path())
+            .find(|p| p.to_string_lossy().ends_with(".afterpass.json.gz")).unwrap();
+        let captured = Session::from_model(bundle::parse(&gunzip(&bundle_file)).unwrap());
+        println!("== {model}");
+        for (what, s) in [("imported", &imported), ("captured", &captured)] {
+            let c = &s.pane(1).graph;
+            let mut grades = BTreeMap::new();
+            for l in s.links()[0][1].iter().flatten() {
+                *grades.entry(format!("{:?}/{}", l.grade, l.via.as_str())).or_insert(0) += 1;
+            }
+            let unknown = (0..c.nodes.len()).filter(|&k| s.links()[0][1][k].is_empty()).count();
+            let timed: Vec<f32> = c.nodes.iter().filter_map(|n| n.time_us).collect();
+            let side = s.side(1).unwrap();
+            println!("  {what}: {} source, {} compiled nodes, {} timed (sum {:.0} us), latency {:?} us, range {:?}; links {grades:?}, {unknown} kernels unlinked; about {}",
+                s.pane(0).graph.nodes.len(), c.nodes.len(), timed.len(), timed.iter().sum::<f32>(), side.latency_us, side.latency_range, s.about(1));
+        }
+        let titles = |s: &Session, timed: bool| s.findings_json().iter().map(|x| {
+            let title = x["title"].as_str().unwrap();
+            // a time finding's title ends with the measured time, after two spaces
+            format!("[{}] {}", x["section"].as_str().unwrap(), if timed { title } else { title.split("  ").next().unwrap() })
+        }).collect::<BTreeSet<_>>();
+        let same = titles(&imported, true).intersection(&titles(&captured, true)).count();
+        let (a, b) = (titles(&imported, false), titles(&captured, false));
+        println!("  findings: {} imported, {} captured, {same} the same; without times {} and {}, {} the same",
+            imported.findings_json().len(), captured.findings_json().len(), a.len(), b.len(), a.intersection(&b).count());
+        for x in a.difference(&b) {
+            println!("  only imported: {x}");
+        }
+        for x in b.difference(&a) {
+            println!("  only captured: {x}");
+        }
+    }
+}

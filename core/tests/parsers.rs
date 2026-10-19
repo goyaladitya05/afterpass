@@ -5,7 +5,7 @@ use afterpass_core::hier::{majority_scope, scope_tokens, Hier};
 use afterpass_core::ir::{Graph, Grade, Link, Model, Node, Via, NONE};
 use afterpass_core::onnx::ByteSource;
 use afterpass_core::provenance::Linker;
-use afterpass_core::{bundle, onnx, ovir, tflite, Session};
+use afterpass_core::{bundle, onnx, ovexec, ovir, tflite, Session};
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -159,6 +159,82 @@ fn claims_are_graded_as_the_capture_grades_them() {
     assert_eq!(link(&["elsewhere", "a/b"]), [(NONE, Grade::Unknown, Via::Unknown)]);
     // an IR source's tensors are not matched, as in the capture
     assert_eq!(Linker::new(&g, false).link(7, &["t3".into()])[0].grade, Grade::Unknown);
+}
+
+fn toy_import(report: Option<&[u8]>) -> Model {
+    ovexec::import(&toy_onnx(), &fixture("toy.exec.xml"), report).unwrap()
+}
+
+/// benchmark_app's execution graph and statistics report give the compiled graph, times and links a capture of
+/// the same model gives (toy.exec.xml and toy.openvino-cpu.afterpass.json.gz: OpenVINO 2026.4.1, one CPU).
+#[test]
+fn exec_graph_imports_like_a_capture() {
+    let m = toy_import(Some(&fixture("toy.benchmark_report.csv")));
+    let b = bundle::parse(&gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"))).unwrap();
+    let (c, bc) = (m.compiled.as_ref().unwrap(), b.compiled.as_ref().unwrap());
+    // the same kernels in the same order; OpenVINO numbers generated constants per process, so their names differ
+    let kernels = |g: &Graph| g.nodes.iter().map(|n| format!("{} {} {} {:?}", n.op, n.kernel, n.precision,
+        n.claims.iter().filter(|c| !c.starts_with("Con")).collect::<Vec<_>>())).collect::<Vec<_>>();
+    assert_eq!(kernels(c), kernels(bc));
+    let links = |m: &Model| m.links.iter().map(|l| (l.compiled, l.source, l.grade, l.via)).collect::<Vec<_>>();
+    assert_eq!(links(&m), links(&b));
+    let time = |name: &str| c.nodes.iter().find(|n| n.name == name).unwrap().time_us;
+    assert_eq!((time("/model/layers.1/fc/Add"), time("logits"), time("ids")), (Some(16.0), Some(5.0), None));
+    assert_eq!(c.nodes.iter().filter(|n| n.time_us.is_some()).count(), 6);
+    let tensor = &c.tensors[c.nodes.iter().find(|n| n.name == "Convert_3966").unwrap().outputs[0] as usize];
+    assert_eq!((tensor.dtype.as_str(), tensor.layout.as_str()), ("i32", "ab"));
+    assert!(c.nodes.iter().all(|n| n.attrs.iter().all(|(k, _)| k != "primitiveType" && k != "execTimeMcs")));
+    // latency: the report's median and range, in whole hundredths of a millisecond
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    assert!(near(m.latency_us.unwrap(), 10.0), "{:?}", m.latency_us);
+    assert!(matches!(m.latency_range, Some((lo, hi)) if near(lo, 10.0) && near(hi, 50.0)), "{:?}", m.latency_range);
+    assert_eq!((m.device.as_str(), m.label.as_str(), m.imported.as_str()), ("CPU", "openvino CPU benchmark_app", "benchmark_app"));
+    // without a report: no device and no latency, rather than guesses
+    let bare = toy_import(None);
+    assert_eq!((bare.device.as_str(), bare.latency_us, bare.label.as_str()), ("", None, "openvino benchmark_app"));
+    // a kernel that only computes constants ran once, not per inference: its time is dropped
+    let xml = String::from_utf8(fixture("toy.exec.xml")).unwrap();
+    let at = xml.find(r#"name="/model/layers.0/fc/MatMul/transpose_b""#).unwrap();
+    let xml = format!("{}{}", &xml[..at], xml[at..].replacen(r#"execTimeMcs="not_executed""#, r#"execTimeMcs="40""#, 1));
+    let g = ovexec::compiled(xml.as_bytes()).unwrap();
+    assert_eq!(g.nodes.iter().find(|n| n.name == "/model/layers.0/fc/MatMul/transpose_b").unwrap().time_us, None);
+}
+
+/// The session side: panes, header facts, and the refusals that keep a wrong combination from loading.
+#[test]
+fn exec_graph_sessions() {
+    let mut s = Session::from_model(Model { source: toy_onnx(), ..Default::default() });
+    s.add_exec_graph(&fixture("toy.exec.xml"), Some(&fixture("toy.benchmark_report.csv")), "toy.onnx").unwrap();
+    assert_eq!((s.panes(), s.node_count(0), s.node_count(1)), (2, 15, 29));
+    let about: serde_json::Value = serde_json::from_str(&s.about(1)).unwrap();
+    assert_eq!(about, serde_json::json!({"runtime": "openvino", "version": "", "device": "CPU", "device_name": "", "captured": "",
+        "model": "toy.onnx", "phase": "", "imported": "benchmark_app"}));
+    assert!(s.findings_json().iter().any(|x| x["section"] == "time"));
+    // an IR source: names still link, tensor names are not tried (as in the capture)
+    let mut ir = Session::from_model(Model { source: ovir::parse(&fixture("toy.xml")).unwrap(), ..Default::default() });
+    ir.add_exec_graph(&fixture("toy.exec.xml"), None, "toy.xml").unwrap();
+    assert!(ir.links()[0][1].iter().flatten().any(|l| l.grade == Grade::Explicit));
+    // the report in its JSON form (-json_stats), and with a percentile other than the median
+    let json = br#"{"cmd_options": {"-m": "toy.onnx", "-d": "CPU"}, "configuration_setup": {"target device": "CPU"},
+        "execution_results": {"latency (ms)": "0.01", "avg latency": "0.02", "min latency": "0.01", "max latency": "0.05"}}"#;
+    let r = ovexec::report(json).unwrap();
+    assert_eq!((r.device.as_str(), r.latency_us.is_some(), r.latency_range.is_some()), ("CPU", true, true));
+    let csv = String::from_utf8(fixture("toy.benchmark_report.csv")).unwrap().replace("latency (ms);", "latency (90 percentile) (ms);");
+    assert_eq!(ovexec::report(csv.as_bytes()).unwrap().latency_us, None);
+    // what is and is not an execution graph
+    assert!(ovexec::is_exec_graph(&ovir::parse(&fixture("toy.exec.xml")).unwrap()));
+    assert!(!ovexec::is_exec_graph(&ovir::parse(&fixture("toy.xml")).unwrap()));
+    assert!(ovexec::compiled(&fixture("toy.xml")).unwrap_err().contains("not an OpenVINO execution graph"));
+    assert!(ovexec::report(&fixture("toy.exec.xml")).is_err());
+    // another model's execution graph, a TFLite source (OpenVINO renames its ops), or a session that already has a
+    // compiled graph
+    let mut other = Session::from_model(Model { source: dag(&[("A", &[]), ("B", &[0])]), ..Default::default() });
+    let e = other.add_exec_graph(&fixture("toy.exec.xml"), None, "other.onnx").unwrap_err();
+    assert!(e.contains("names no op of this model"), "{e}");
+    assert_eq!(other.panes(), 1);
+    let mut tfl = Session::from_model(Model { source: toy_tflite(), ..Default::default() });
+    assert!(tfl.add_exec_graph(&fixture("toy.exec.xml"), None, "toy.tflite").unwrap_err().contains("convert the model with ovc"));
+    assert!(toy_session("toy.openvino-cpu.afterpass.json.gz").add_exec_graph(&fixture("toy.exec.xml"), None, "x").is_err());
 }
 
 #[test]
@@ -359,11 +435,18 @@ fn bad_inputs_are_errors_not_panics() {
     let xml = fixture("toy.xml");
     let json = gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"));
     let tfl = fixture("toy.tflite");
+    let (exec, report) = (fixture("toy.exec.xml"), fixture("toy.benchmark_report.csv"));
     let open = |kind: &str, b: &[u8]| -> Result<Session, String> {
         let s = match kind {
             "onnx" => Session::from_model(Model { source: onnx::parse(&mut &b[..])?, ..Default::default() }),
             "tflite" => Session::from_model(Model { source: tflite::parse(&mut &b[..])?, ..Default::default() }),
             "xml" => Session::from_model(Model { source: ovir::parse(b)?, ..Default::default() }),
+            // an execution graph or a benchmark_app report, next to the toy model
+            "exec" | "report" => {
+                let mut s = Session::from_model(Model { source: toy_onnx(), ..Default::default() });
+                if kind == "exec" { s.add_exec_graph(b, None, "toy.onnx")? } else { s.add_exec_graph(&exec, Some(b), "toy.onnx")? }
+                s
+            }
             _ => Session::from_model(bundle::parse(b)?),
         };
         let _ = s.findings_json();
@@ -374,7 +457,7 @@ fn bad_inputs_are_errors_not_panics() {
         ("onnx", b"<html>not a model</html>".to_vec()), ("xml", b"<html><body>hi</body></html>".to_vec()),
         ("bundle", b"{\"format\": \"afterpass-bundle\", \"schema_version\": 0}".to_vec()),
         ("bundle", b"{\"format\": \"afterpass-bundle\", \"schema_version\": 0, \"provenance\": [{\"compiled\": 99, \"source\": 99}]}".to_vec())];
-    for (kind, bytes) in [("onnx", &onnx_bytes), ("xml", &xml), ("bundle", &json), ("tflite", &tfl)] {
+    for (kind, bytes) in [("onnx", &onnx_bytes), ("xml", &xml), ("bundle", &json), ("tflite", &tfl), ("exec", &exec), ("report", &report)] {
         for cut in (0..bytes.len()).step_by(bytes.len() / 97 + 1) {
             cases.push((kind, bytes[..cut].to_vec()));
         }
@@ -392,9 +475,20 @@ fn bad_inputs_are_errors_not_panics() {
     v["provenance"][0]["compiled"] = 100000.into();
     v["provenance"][1]["source"] = 100000.into();
     cases.push(("bundle", serde_json::to_vec(&v).unwrap()));
+    // execution graphs with damaged rt_info, edges to layers that do not exist, and no layers
+    let text = String::from_utf8(exec.clone()).unwrap();
+    for (from, to) in [(r#"execTimeMcs="9""#, r#"execTimeMcs="-9""#), (r#"execTimeMcs="16""#, r#"execTimeMcs="1e99""#),
+                       (r#"outputPrecisions="f32""#, r#"outputPrecisions=",,,,,,,""#), (r#"outputLayouts="abc""#, r#"outputLayouts="""#),
+                       (r#"originalLayersNames="/embed/Gather""#, r#"originalLayersNames=",,,""#), (r#"to-layer="9""#, r#"to-layer="999""#),
+                       (r#"from-layer="4""#, r#"from-layer="-1""#), (r#"primitiveType="#, r#"primitive="#), (r#"<layer "#, r#"<layr "#)] {
+        assert!(text.contains(from), "{from}");
+        cases.push(("exec", text.replace(from, to).into_bytes()));
+    }
+    cases.extend([("report", b"Command line parameters\n;;\nlatency (ms);fast\nmin latency;\n".to_vec()),
+        ("report", b"{\"cmd_options\": 5, \"execution_results\": [1, 2]}".to_vec()), ("report", b"{\"cmd_options\": {".to_vec())]);
     let (mut panics, mut empty) = (Vec::new(), Vec::new());
     for (i, (kind, bytes)) in cases.iter().enumerate() {
-        match std::panic::catch_unwind(|| open(kind, bytes).map(|s| s.node_count(0))) {
+        match std::panic::catch_unwind(|| open(kind, bytes).map(|s| (0..s.panes()).map(|p| s.node_count(p)).min().unwrap_or(0))) {
             Err(_) => panics.push((i, *kind, bytes.len())),
             Ok(Ok(0)) => empty.push((i, *kind, bytes.len())),
             _ => {}

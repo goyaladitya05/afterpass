@@ -173,6 +173,8 @@ pub struct Model {
     pub model_file: String,
     /// What was profiled when it is not one whole inference, e.g. "decode, 32 steps after a 128-token prompt".
     pub phase: String,
+    /// The tool whose output was imported, e.g. "benchmark_app"; empty for a capture bundle.
+    pub imported: String,
     /// Median whole-inference latency, when profiled.
     pub latency_us: Option<f32>,
     /// Fastest and slowest inference of the profiled runs.

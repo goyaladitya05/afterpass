@@ -120,6 +120,7 @@ pub fn parse(json: &[u8]) -> Result<Model, String> {
         captured: s(&b["created"]).chars().take(10).collect(),
         model_file: s(&b["capture"]["model"]),
         phase,
+        imported: String::new(),
         latency_us: b["profile"]["latency"]["median"].as_f64().map(|v| v as f32),
         latency_range: b["profile"]["latency"]["min"].as_f64().zip(b["profile"]["latency"]["max"].as_f64()).map(|(a, b)| (a as f32, b as f32)),
     })
