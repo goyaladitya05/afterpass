@@ -25,11 +25,27 @@ def capture(args) -> None:
         sys.exit(f"{model.name}: expected an ONNX model (.onnx) or OpenVINO IR (.xml)")
     src = source.load(model)
     shapes = dict(args.shape)
+    phase = "-decode" if args.decode else ""
+    out = Path(args.output or f"{model.stem}.{args.runtime}-{args.device.lower()}{phase}.afterpass.json.gz")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if args.decode and args.runtime != "openvino":
+        sys.exit("--decode is supported for openvino only")
+    extra = {}
     if args.runtime == "openvino":
         from . import ov as runtime
-    else:
         if args.decode:
-            sys.exit("--decode is supported for openvino only")
+            extra["decode"] = args.decode
+    elif args.runtime == "onnxruntime":
+        if model.suffix != ".onnx":
+            sys.exit("onnxruntime captures need an ONNX model (.onnx)")
+        try:
+            from . import ort as runtime
+        except ImportError as e:
+            sys.exit(f"ONNX Runtime is not available ({e}): install the extra, for example uv sync --extra onnxruntime")
+        if args.device not in runtime.PROVIDERS:
+            sys.exit(f"onnxruntime captures support --device {', '.join(runtime.PROVIDERS)} (got {args.device}); the CUDA and TensorRT providers are not supported yet")
+        extra["work_dir"] = out.resolve().parent
+    else:
         if not args.device.startswith("GPU"):
             sys.exit("tensorrt captures need --device GPU")
         try:
@@ -37,7 +53,6 @@ def capture(args) -> None:
         except ImportError as e:
             sys.exit(f"TensorRT is not available ({e}): install the extra, for example uv sync --extra tensorrt")
     try:
-        extra = {"decode": args.decode} if args.decode else {}
         result = runtime.capture(model, args.device, shapes, args.iterations, args.warmup, Linker(src), **extra)
     except RuntimeError as e:
         sys.exit(f"{args.runtime} failed on {model.name}: {e}")
@@ -53,9 +68,6 @@ def capture(args) -> None:
         + "".join(f" --shape {n}={','.join(map(str, d))}" for n, d in args.shape)
         + f" --iterations {args.iterations} --warmup {args.warmup}" + (f" --decode {args.decode}" if args.decode else ""),
     }
-    phase = "-decode" if args.decode else ""
-    out = Path(args.output or f"{model.stem}.{args.runtime}-{args.device.lower()}{phase}.afterpass.json.gz")
-    out.parent.mkdir(parents=True, exist_ok=True)
     bundle.write(out, bundle.build(src, result, meta))
     print(f"wrote {out} ({out.stat().st_size} bytes) in {meta['capture_s']:.1f}s")
 
@@ -65,8 +77,8 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("capture", help="compile a model, profile it and write a bundle")
     c.add_argument("model", help="ONNX model (.onnx) or OpenVINO IR (.xml)")
-    c.add_argument("--runtime", choices=["openvino", "tensorrt"], required=True)
-    c.add_argument("--device", default="CPU", help="CPU, GPU or an OpenVINO device name such as GPU.1")
+    c.add_argument("--runtime", choices=["openvino", "tensorrt", "onnxruntime"], required=True)
+    c.add_argument("--device", default="CPU", help="CPU, GPU or an OpenVINO device name such as GPU.1 (onnxruntime: CPU)")
     c.add_argument("--shape", type=_shape, action="append", default=[], help="input shape override, name=d0,d1,...")
     c.add_argument("--iterations", type=int, default=50)
     c.add_argument("--warmup", type=int, default=5)
