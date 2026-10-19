@@ -23,11 +23,141 @@ pub fn data_path(p: &Pane, v: usize) -> bool {
     !p.hier.folded[v] && !IO.contains(&p.graph.nodes[v].op.as_str())
 }
 
+/// Kernels a runtime inserts to move or re-encode data. When they do claim source ops (58 of 598 in the corpus),
+/// those are always data movement: concats, reshapes, casts, splits, Q/DQ.
+const MOVE_KERNELS: [&str; 5] = ["Reorder", "Reformat", "NoOp", "MemoryOutput", "DynamicQuantize"];
+const MOVE_OPS: [&str; 14] = ["Reshape", "Transpose", "Cast", "Convert", "Concat", "Split", "Squeeze", "Unsqueeze",
+    "Flatten", "Identity", "QuantizeLinear", "DequantizeLinear", "Slice", "StridedSlice"];
+
+/// Whether compiled node `k` can have computed source op `v`, judging by their op types alone.
+fn can_compute(src: &Pane, v: usize, cmp: &Pane, k: usize) -> bool {
+    !MOVE_KERNELS.contains(&cmp.graph.nodes[k].op.as_str()) || MOVE_OPS.contains(&src.graph.nodes[v].op.as_str())
+}
+
+/// Shapes that can be the same tensor: equal, with `-1` (dynamic) matching any size, and ignoring size-1 dims
+/// when the ranks differ (a GPU plugin may pad `[128, 768]` to `[1, 128, 768, 1]`).
+fn same_shape(a: Option<&Vec<i64>>, b: Option<&Vec<i64>>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else { return false };
+    let eq = |a: &[i64], b: &[i64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x == y || *x < 0 || *y < 0);
+    let squeeze = |a: &[i64]| a.iter().copied().filter(|&d| d != 1).collect::<Vec<_>>();
+    eq(a, b) || eq(&squeeze(a), &squeeze(b))
+}
+
+/// Kernel sets of one cluster as bitsets over the cluster's kernel positions.
+type Bits = Vec<u64>;
+
+fn bits_or(a: &mut Bits, b: &Bits) {
+    a.iter_mut().zip(b).for_each(|(x, y)| *x |= y);
+}
+
+/// For each op of a pass-1 region, the cluster kernels that can have computed it. Dataflow alone decides:
+/// * entry: an op reading the result of a source op computed in a named kernel `u` outside the cluster runs in
+///   a cluster kernel downstream of `u`, if that result leaves `u` (its shape fits one of `u`'s outputs; Myelin
+///   recomputes small ops such as RoPE tables inside each kernel that needs them);
+/// * exit: an op whose result enters a named kernel `n` outside the cluster (its shape fits one of `n`'s
+///   inputs) runs in a cluster kernel upstream of `n`;
+/// * an op's descendants run in kernels reachable from its kernel, its ancestors in kernels that reach it.
+///
+/// An op left with no kernel (the rules assume no op is computed twice) falls back to every kernel.
+fn narrow(src: &Pane, cmp: &Pane, links: &Links, region: &[usize], cluster: &[u32]) -> Vec<Vec<u32>> {
+    let c = cluster.len();
+    let fits = |v: usize| -> Vec<u32> { cluster.iter().copied().filter(|&k| can_compute(src, v, cmp, k as usize)).collect() };
+    if !(2..=1024).contains(&c) {
+        return region.iter().map(|&v| fits(v)).collect();
+    }
+    let words = c.div_ceil(64);
+    let pos: HashMap<u32, usize> = cluster.iter().enumerate().map(|(j, &k)| (k, j)).collect();
+    let one = |j: usize| -> Bits { let mut b = vec![0; words]; b[j / 64] |= 1 << (j % 64); b };
+    // cluster kernels reachable from kernel `k` along `adj`, walking through cluster kernels only
+    let walk = |k: u32, adj: &[Vec<u32>]| -> Bits {
+        let (mut b, mut st) = (vec![0; words], vec![k]);
+        while let Some(x) = st.pop() {
+            for w in &adj[x as usize] {
+                if let Some(&q) = pos.get(w) && b[q / 64] >> (q % 64) & 1 == 0 {
+                    b[q / 64] |= 1 << (q % 64);
+                    st.push(*w);
+                }
+            }
+        }
+        b
+    };
+    // per cluster kernel: the kernels it reaches (down) and that reach it (up), itself included
+    let closure = |adj: &[Vec<u32>]| -> Vec<Bits> {
+        (0..c).map(|j| { let mut b = walk(cluster[j], adj); bits_or(&mut b, &one(j)); b }).collect()
+    };
+    let (down, up) = (closure(&cmp.succs), closure(&cmp.preds));
+    fn shape(g: &Graph, t: u32) -> Option<&Vec<i64>> {
+        g.tensors.get(t as usize).and_then(|t| t.shape.as_ref())
+    }
+    let out = |v: usize| src.graph.nodes[v].outputs.first().and_then(|&t| shape(&src.graph, t));
+    let fits_any = |v: usize, ts: &[u32]| ts.iter().any(|&t| same_shape(out(v), shape(&cmp.graph, t)));
+    let at: HashMap<usize, usize> = region.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+    let mut allowed: Vec<Bits> = region.iter().map(|&v| {
+        let mut b = vec![0; words];
+        for k in fits(v) {
+            bits_or(&mut b, &one(pos[&k]));
+        }
+        b
+    }).collect();
+    let constrain = |allowed: &mut Vec<Bits>, i: usize, set: &Bits| allowed[i].iter_mut().zip(set).for_each(|(x, y)| *x &= y);
+    // entry and exit constraints from the named kernels around the cluster
+    let mut outside: Vec<usize> = cluster.iter().flat_map(|&k| cmp.preds[k as usize].iter().chain(&cmp.succs[k as usize]))
+        .map(|&w| w as usize).filter(|w| !pos.contains_key(&(*w as u32)) && links[1][*w].iter().any(|l| l.via != Via::Structure)).collect();
+    outside.sort_unstable();
+    outside.dedup();
+    for u in outside {
+        let (readers, feeders) = (walk(u as u32, &cmp.succs), walk(u as u32, &cmp.preds));
+        let k = &cmp.graph.nodes[u];
+        for s in links[1][u].iter().map(|l| l.other as usize) {
+            let leaves = fits_any(s, &k.outputs);
+            for v in &src.succs[s] {
+                if let Some(&i) = at.get(&(*v as usize)) && leaves && readers.iter().any(|&x| x != 0) {
+                    constrain(&mut allowed, i, &readers);
+                }
+            }
+            for v in &src.preds[s] {
+                if let Some(&i) = at.get(&(*v as usize)) && fits_any(*v as usize, &k.inputs) && feeders.iter().any(|&x| x != 0) {
+                    constrain(&mut allowed, i, &feeders);
+                }
+            }
+        }
+    }
+    // carry the constraints along the region's edges, forward then back
+    let spread = |b: &Bits, reach: &[Bits]| -> Bits {
+        let mut out = vec![0; words];
+        for j in (0..c).filter(|&j| b[j / 64] >> (j % 64) & 1 == 1) {
+            bits_or(&mut out, &reach[j]);
+        }
+        out
+    };
+    for (i, &v) in region.iter().enumerate() {
+        for p in &src.preds[v] {
+            if let Some(&a) = at.get(&(*p as usize)) {
+                let set = spread(&allowed[a], &down);
+                constrain(&mut allowed, i, &set);
+            }
+        }
+    }
+    for (i, &v) in region.iter().enumerate().rev() {
+        for q in &src.succs[v] {
+            if let Some(&a) = at.get(&(*q as usize)) {
+                let set = spread(&allowed[a], &up);
+                constrain(&mut allowed, i, &set);
+            }
+        }
+    }
+    region.iter().zip(allowed).map(|(&v, b)| {
+        let ks: Vec<u32> = (0..c).filter(|&j| b[j / 64] >> (j % 64) & 1 == 1).map(|j| cluster[j]).collect();
+        if ks.is_empty() { fits(v) } else { ks }
+    }).collect()
+}
+
 /// Recover links the runtime's names lost, in two passes, all graded inferred via structure.
 ///
 /// 1. Compiled kernels whose claimed names match nothing (a fused MoE kernel named `ReduceSum_123/MOECompressed`)
 ///    are grouped into connected clusters. The source ops lying between the sources of the cluster's nearest
-///    linked upstream kernels and those of its nearest linked downstream kernels are linked to the cluster.
+///    linked upstream kernels and those of its nearest linked downstream kernels form its region. Regions are
+///    assigned tightest first, and each op is linked to the cluster kernels `narrow` leaves it.
 /// 2. A remaining source op nobody claims, whose outputs (through other unclaimed ops) reach exactly one kernel,
 ///    was computed inside that kernel or eliminated by it: pattern fusions that keep only the last op's name
 ///    (OpenVINO RMS, RoPE, GELU, SiLU) and layout ops absorbed by TensorRT Myelin.
@@ -46,6 +176,7 @@ pub fn infer_structure(src: &Pane, cmp: &Pane, links: &mut Links) -> usize {
     // pass 1: clusters of compiled kernels without a resolvable claim
     let orphan = |links: &Links, k: usize| data_path(cmp, k) && links[1][k].is_empty();
     let mut seen = vec![false; nc];
+    let mut found = Vec::new();
     for k0 in 0..nc {
         if seen[k0] || !orphan(links, k0) {
             continue;
@@ -90,14 +221,20 @@ pub fn infer_structure(src: &Pane, cmp: &Pane, links: &mut Links) -> usize {
             mark
         };
         let (fwd, bwd) = (reach(&sa, &src.succs), reach(&sd, &src.preds));
-        let region: Vec<usize> = (lo..=hi).filter(|&v| fwd[v] && bwd[v] && !named[v] && !linked_src[v] && data_path(src, v)).collect();
-        if region.len() > 50_000 {
-            continue;
+        let region: Vec<usize> = (lo..=hi).filter(|&v| fwd[v] && bwd[v] && !named[v] && data_path(src, v)).collect();
+        if region.len() <= 50_000 {
+            found.push((cluster, region));
         }
-        // several kernels without names: the range is computed somewhere in them, which one is not known
-        for v in region {
-            for &k in &cluster {
-                add(links, v, k, &mut linked_src);
+    }
+    // tightest regions first: a cluster chained along the residual stream across many layers has a region that
+    // also covers the ops of smaller clusters inside it
+    found.sort_by_key(|(_, region)| region.len());
+    for (cluster, mut region) in found {
+        region.retain(|&v| !linked_src[v]);
+        // several kernels without names: each op is computed in one of the kernels `narrow` leaves it
+        for (v, ks) in region.iter().zip(narrow(src, cmp, links, &region, &cluster)) {
+            for k in ks {
+                add(links, *v, k, &mut linked_src);
             }
         }
     }
@@ -124,9 +261,13 @@ pub fn infer_structure(src: &Pane, cmp: &Pane, links: &mut Links) -> usize {
                 };
             }
         }
-        reach[v] = r;
-        if let Some(k) = r.filter(|&k| k != NONE) {
-            add(links, v, k, &mut linked_src);
+        match r {
+            Some(k) if k != NONE && !can_compute(src, v, cmp, k as usize) => reach[v] = Some(NONE),
+            Some(k) if k != NONE => {
+                reach[v] = r;
+                add(links, v, k, &mut linked_src);
+            }
+            _ => reach[v] = r,
         }
     }
     linked_src.iter().filter(|&&x| x).count()

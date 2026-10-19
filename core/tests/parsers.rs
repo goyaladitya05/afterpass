@@ -131,6 +131,60 @@ fn structure_recovers_ops_whose_names_were_lost() {
     assert_eq!((l[0].other, l[0].grade, l[0].via), (0, Grade::Inferred, Via::Structure));
 }
 
+/// A graph from (op, inputs) pairs: node i writes tensor `t{i}` of shape `[8]` and reads the tensors of its
+/// inputs, or a graph input when it has none.
+fn dag(nodes: &[(&str, &[usize])]) -> Graph {
+    let mut g = Graph::default();
+    for (i, (op, inputs)) in nodes.iter().enumerate() {
+        let ins = if inputs.is_empty() { vec![g.tensor("x")] } else { inputs.iter().map(|j| g.tensor(&format!("t{j}"))).collect() };
+        let out = g.tensor(&format!("t{i}"));
+        g.tensors[out as usize].shape = Some(vec![8]);
+        g.nodes.push(Node { name: format!("n{i}"), op: op.to_string(), inputs: ins, outputs: vec![out], ..Default::default() });
+    }
+    g.finish();
+    g
+}
+
+/// The structure links of each source op, given the runtime's explicit (kernel, op) links.
+fn inferred(src: Graph, cmp: Graph, named: &[(u32, u32)]) -> Vec<Vec<u32>> {
+    let links = named.iter().map(|&(compiled, source)| Link { compiled, source, grade: Grade::Explicit, via: Via::Name }).collect();
+    let s = Session::from_model(Model { source: src, compiled: Some(cmp), links, ..Default::default() });
+    s.links()[0][0].iter().map(|l| l.iter().filter(|l| l.via == Via::Structure).map(|l| l.other).collect()).collect()
+}
+
+/// A kernel that only moves data is not credited with a compute op.
+#[test]
+fn inserted_kernels_get_no_compute_ops() {
+    let src = dag(&[("Conv", &[]), ("Relu", &[0]), ("Conv", &[1])]);
+    // the Relu's kernel lost its name; the runtime inserted a Reorder in front of it
+    let cmp = dag(&[("Conv", &[]), ("Reorder", &[0]), ("Eltwise", &[1]), ("Conv", &[2])]);
+    assert_eq!(inferred(src, cmp, &[(0, 0), (3, 2)])[1], [2]);
+}
+
+/// In a cluster of nameless kernels, dataflow decides which of them can have computed each op.
+#[test]
+fn cluster_ops_are_narrowed_by_dataflow() {
+    // source a -> b, b -> c -> e and b -> d -> f; kernels: 0 = a, 1 -> 2 -> 4 = e, 1 -> 3 -> 5 = f
+    let src = dag(&[("Op", &[]), ("Op", &[0]), ("Op", &[1]), ("Op", &[1]), ("Op", &[2]), ("Op", &[3])]);
+    let cmp = dag(&[("K", &[]), ("K", &[0]), ("K", &[1]), ("K", &[1]), ("K", &[2]), ("K", &[3])]);
+    let l = inferred(src, cmp, &[(0, 0), (4, 4), (5, 5)]);
+    // b feeds both branches: only kernel 1 reaches both; c cannot be on d's branch, nor d on c's
+    assert_eq!(l[1], [1]);
+    assert!(!l[2].contains(&3) && !l[3].contains(&2), "{l:?}");
+}
+
+/// A cluster whose region spans a smaller cluster's region does not take that cluster's ops.
+#[test]
+fn tightest_regions_are_assigned_first() {
+    // source a -> b -> c -> d -> e; kernels 0 = a, 4 = c, 5 = e; nameless 1 -> 2 runs from 0 to 5 and nameless
+    // 3 sits between 0 and 4, so b, between a and c, belongs to 3
+    let src = dag(&[("Op", &[]), ("Op", &[0]), ("Op", &[1]), ("Op", &[2]), ("Op", &[3])]);
+    let cmp = dag(&[("K", &[]), ("K", &[0]), ("K", &[1]), ("K", &[0]), ("K", &[3]), ("K", &[2, 4])]);
+    let l = inferred(src, cmp, &[(0, 0), (4, 2), (5, 4)]);
+    assert_eq!(l[1], [3]);
+    assert!(!l[3].is_empty() && !l[3].contains(&3), "{l:?}");
+}
+
 #[test]
 fn reveal_opens_a_collapsed_stack() {
     let g = toy_onnx();
