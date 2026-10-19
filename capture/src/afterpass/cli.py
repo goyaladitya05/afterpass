@@ -25,16 +25,20 @@ def capture(args) -> None:
         sys.exit(f"{model.name}: expected an ONNX model (.onnx) or OpenVINO IR (.xml)")
     src = source.load(model)
     shapes = dict(args.shape)
-    phase = "-decode" if args.decode else ""
+    phase = "-decode" if args.decode else "-static" if args.static else ""
     out = Path(args.output or f"{model.stem}.{args.runtime}-{args.device.lower()}{phase}.afterpass.json.gz")
     out.parent.mkdir(parents=True, exist_ok=True)
-    if args.decode and args.runtime != "openvino":
-        sys.exit("--decode is supported for openvino only")
+    if (args.decode or args.static) and args.runtime != "openvino":
+        sys.exit("--decode and --static are supported for openvino only")
+    if args.decode and args.static:
+        sys.exit("--decode needs the dynamic compile: drop --static")
     extra = {}
     if args.runtime == "openvino":
         from . import ov as runtime
         if args.decode:
             extra["decode"] = args.decode
+        if args.static:
+            extra["static"] = True
     elif args.runtime == "onnxruntime":
         if model.suffix != ".onnx":
             sys.exit("onnxruntime captures need an ONNX model (.onnx)")
@@ -66,7 +70,8 @@ def capture(args) -> None:
         # file names only: a bundle is shared, local paths are not
         "command": f"capture {model.name} --runtime {args.runtime} --device {args.device}"
         + "".join(f" --shape {n}={','.join(map(str, d))}" for n, d in args.shape)
-        + f" --iterations {args.iterations} --warmup {args.warmup}" + (f" --decode {args.decode}" if args.decode else ""),
+        + f" --iterations {args.iterations} --warmup {args.warmup}" + (f" --decode {args.decode}" if args.decode else "")
+        + (" --static" if args.static else ""),
     }
     bundle.write(out, bundle.build(src, result, meta))
     print(f"wrote {out} ({out.stat().st_size} bytes) in {meta['capture_s']:.1f}s")
@@ -82,6 +87,8 @@ def main() -> None:
     c.add_argument("--shape", type=_shape, action="append", default=[], help="input shape override, name=d0,d1,...")
     c.add_argument("--iterations", type=int, default=50)
     c.add_argument("--warmup", type=int, default=5)
+    c.add_argument("--static", action="store_true",
+                   help="stateful LLM IR: compile with the --shape dims fixed (default: dynamic, as OpenVINO GenAI does)")
     c.add_argument("--decode", type=int, default=0, metavar="N",
                    help="stateful LLM IR: profile the N single-token steps after a prefill of the --shape input_ids length")
     c.add_argument("-o", "--output", help="bundle path")

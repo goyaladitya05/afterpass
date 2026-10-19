@@ -145,6 +145,12 @@ def test_openvino_decode(stateful, tiny):
     p = bundle.read(out)["profile"]
     assert (p["phase"], p["prompt_tokens"], p["decode_steps"]) == ("decode", 8, 4)
     assert p["latency"]["median"] > 0 and p["nodes"]
+    assert "?" in bundle.read(out)["compiled"]["input_shapes"]["input_ids"]  # compiled dynamic, as GenAI does
+    static = stateful.parent / "static.json.gz"
+    subprocess.run([sys.executable, "-m", "afterpass", "capture", str(stateful), "--runtime", "openvino", "--device", "CPU",
+                    "--shape", "input_ids=1,8", "--shape", "attention_mask=1,8", "--iterations", "2", "--warmup", "1",
+                    "--static", "-o", str(static)], check=True)
+    assert bundle.read(static)["compiled"]["input_shapes"]["input_ids"] == "[1,8]"
     # a model without a KV cache has no decode phase
     r = subprocess.run([sys.executable, "-m", "afterpass", "capture", str(tiny / "tiny.onnx"), "--runtime", "openvino",
                         "--decode", "4", "-o", str(tiny / "x.json.gz")], capture_output=True, text=True)

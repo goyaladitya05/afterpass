@@ -63,7 +63,7 @@ def _graph(rt_model, entries, linker):
     return nodes, tensors, links, ids, bool(ops)
 
 
-def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker, decode: int = 0) -> dict:
+def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker, decode: int = 0, static: bool = False) -> dict:
     """Profile one prefill per run, or with `decode` > 0 the `decode` single-token steps that follow the prefill."""
     core = ov.Core()
     if device not in core.available_devices:
@@ -73,8 +73,9 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     if unknown:
         raise SystemExit(f"--shape names no input: {unknown} (inputs: {[p.get_any_name() for p in model.inputs]})")
     # a stateful LLM stays dynamic, as OpenVINO GenAI compiles it: one compiled graph serves prefill and decode,
-    # so the two phases can be compared kernel by kernel
-    if shapes and not model.get_sinks():
+    # so the two phases can be compared kernel by kernel; `static` fixes the --shape dims anyway, to see what
+    # dynamic shapes cost
+    if shapes and (static or not model.get_sinks()):
         try:
             model.reshape(shapes)
         except RuntimeError as e:  # stateful LLMs keep dynamic KV cache dims; compile dynamic, feed static shapes
@@ -190,7 +191,9 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
     return {
         "compiled": {"runtime": "openvino", "version": ov.get_version(), "device": device,
                      "device_name": core.get_property(device, "FULL_DEVICE_NAME"),
-                     "properties": props, "topology": topology, "nodes": nodes, "tensors": tensors},
+                     "properties": props, "topology": topology, "nodes": nodes, "tensors": tensors,
+                     # as compiled: "?" marks a dynamic dimension (the runtime model only shows the last run's shapes)
+                     "input_shapes": {p.get_any_name(): str(p.get_partial_shape()) for p in compiled.inputs}},
         "profile": {
             "unit": "us", "iterations": iterations, "warmup": warmup,
             "source": "get_profiling_info running means, mean per node over the timed " + ("decode steps" if decode else "runs")
