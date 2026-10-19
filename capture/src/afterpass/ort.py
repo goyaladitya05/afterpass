@@ -158,8 +158,13 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
         if n.op_type in ("ReorderInput", "ReorderOutput") or n.name.startswith(CAST):
             pass  # inserted to convert data: takes over the tensor name of the op it serves, computes none
         elif n.domain == NCHWC and n.name.endswith("_nchwc"):
-            # an NCHWc node is named after the output tensor of the source op it replaced, its own outputs are new
+            # an NCHWc node is named after the output tensor of the source op it replaced, its own outputs are new:
+            # record that name on the output so the core can bound the node by tensor names (infer_boundaries).
+            # Not for a Conv with a fused Sum input (a 4th input): it also computes the residual Add and its
+            # activation, but keeps the Conv's name, so the name would be the wrong tensor.
             claims.append(n.name.removesuffix("_nchwc"))
+            if len(outputs) == 1 and not (n.op_type == "Conv" and len(n.input) > 3 and n.input[3]):
+                tensors[outputs[0]]["names"] = [n.name.removesuffix("_nchwc")]
         else:
             # a fused node keeps the output tensor of the last op it computed, renamed if a cast was put after it
             claims += [t.removeprefix(CAST) for t in outputs]
