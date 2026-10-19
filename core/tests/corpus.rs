@@ -88,7 +88,8 @@ fn onnx_files() {
 
 #[test]
 fn tflite_files() {
-    for rel in ["tflite/efficientnet_lite0/efficientnet_lite0.tflite", "tflite/mobilenet_v1_quant/mobilenet_v1_1.0_224_quant.tflite"] {
+    for rel in ["tflite/efficientnet_lite0/efficientnet_lite0.tflite", "tflite/mobilenet_v1_quant/mobilenet_v1_1.0_224_quant.tflite",
+                "tflite/bert_classifier/bert_classifier.tflite"] {
         let Some(p) = corpus(rel) else { continue };
         let t0 = Instant::now();
         let f = std::fs::File::open(p).unwrap();
