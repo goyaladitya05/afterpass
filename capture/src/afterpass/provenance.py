@@ -12,11 +12,14 @@ class Linker:
     def __init__(self, source: dict):
         self.by_name: dict[str, list[int]] = {}
         self.producer: dict[str, int] = {}
+        self.readers: dict[str, list[dict]] = {}  # source tensor name: the source nodes reading it
         for n in source["nodes"]:
             if n["name"]:
                 self.by_name.setdefault(n["name"], []).append(n["id"])
             for t in n["outputs"]:
                 self.producer[t] = n["id"]
+            for t in n["inputs"]:
+                self.readers.setdefault(t, []).append(n)
 
     def _resolve(self, name: str) -> list[tuple[int, str, str]]:
         """Return (source id, grade, via) for one name the runtime claims."""

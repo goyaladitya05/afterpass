@@ -100,6 +100,25 @@ def _run(model_path, provider: str, shapes: dict, iterations: int, warmup: int, 
     return compile_s, latencies, runs, onnx.load(str(tmp / "optimized.onnx"), load_external_data=False)
 
 
+def _fused_sum_output(n, tensors, linker):
+    """The source tensor an NCHWc Conv with a Sum input really writes: the Add that reads the Conv's output and the
+    sum tensor, then the activation op named in the node, if any. None when the source graph does not show exactly
+    that chain."""
+    conv_out = n.name.removesuffix("_nchwc")
+    summed = (tensors.get(n.input[3], {}).get("names") or [n.input[3]])[0]
+    adds = [r for r in linker.readers.get(conv_out, []) if r["op"] == "Add" and summed in r["inputs"]]
+    if len(adds) != 1:
+        return None
+    out = adds[0]["outputs"][0]
+    act = next((a.s.decode() for a in n.attribute if a.name == "activation"), "")
+    if act:
+        acts = [r for r in linker.readers.get(out, []) if r["op"] == act]
+        if len(acts) != 1:
+            return None
+        out = acts[0]["outputs"][0]
+    return out
+
+
 def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int, linker, work_dir=None) -> dict:
     provider = PROVIDERS.get(device)
     if provider not in ort.get_available_providers():
@@ -160,11 +179,15 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
         elif n.domain == NCHWC and n.name.endswith("_nchwc"):
             # an NCHWc node is named after the output tensor of the source op it replaced, its own outputs are new:
             # record that name on the output so the core can bound the node by tensor names (infer_boundaries).
-            # Not for a Conv with a fused Sum input (a 4th input): it also computes the residual Add and its
-            # activation, but keeps the Conv's name, so the name would be the wrong tensor.
+            # A Conv with a fused Sum input (a 4th input) computes activation(conv(x) + sum) but keeps the Conv's
+            # name, so its output is found in the source graph instead (_fused_sum_output).
             claims.append(n.name.removesuffix("_nchwc"))
-            if len(outputs) == 1 and not (n.op_type == "Conv" and len(n.input) > 3 and n.input[3]):
-                tensors[outputs[0]]["names"] = [n.name.removesuffix("_nchwc")]
+            if len(outputs) == 1:
+                summed = n.op_type == "Conv" and len(n.input) > 3 and n.input[3]
+                out = _fused_sum_output(n, tensors, linker) if summed else n.name.removesuffix("_nchwc")
+                if out:
+                    tensors[outputs[0]]["names"] = [out]
+                    claims.append(out)
         else:
             # a fused node keeps the output tensor of the last op it computed, renamed if a cast was put after it
             claims += [t.removeprefix(CAST) for t in outputs]

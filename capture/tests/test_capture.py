@@ -149,3 +149,18 @@ def test_openvino_decode(stateful, tiny):
     r = subprocess.run([sys.executable, "-m", "afterpass", "capture", str(tiny / "tiny.onnx"), "--runtime", "openvino",
                         "--decode", "4", "-o", str(tiny / "x.json.gz")], capture_output=True, text=True)
     assert r.returncode != 0 and "--decode needs a stateful LLM IR" in r.stderr
+
+
+def test_onnxruntime_fused_sum_output():
+    ort = pytest.importorskip("afterpass.ort")
+    from afterpass.provenance import Linker
+    # source: c = Conv(x); a = Add(c, skip); r = Relu(a). ORT fuses all three into one NCHWc Conv named after c.
+    src = {"nodes": [{"id": 0, "name": "conv", "op": "Conv", "inputs": ["x"], "outputs": ["c"]},
+                     {"id": 1, "name": "add", "op": "Add", "inputs": ["c", "skip"], "outputs": ["a"]},
+                     {"id": 2, "name": "relu", "op": "Relu", "inputs": ["a"], "outputs": ["r"]}]}
+    node = h.make_node("Conv", ["t0", "w", "b", "t1"], ["t2"], name="c_nchwc", domain="com.microsoft.nchwc", activation="Relu")
+    tensors = {"t1": {"names": ["skip"]}}
+    assert ort._fused_sum_output(node, tensors, Linker(src)) == "r"
+    # the activation the node names is not in the source graph: no name rather than a wrong one
+    src["nodes"][2]["op"] = "Sigmoid"
+    assert ort._fused_sum_output(node, tensors, Linker(src)) is None
