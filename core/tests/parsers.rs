@@ -2,8 +2,9 @@ use std::io::Read;
 
 use afterpass_core::analysis::{data_path, linked_nodes};
 use afterpass_core::hier::{majority_scope, scope_tokens, Hier};
-use afterpass_core::ir::{Graph, Grade, Link, Model, Node, Via};
-use afterpass_core::{bundle, onnx, ovir, Session};
+use afterpass_core::ir::{Graph, Grade, Link, Model, Node, Via, NONE};
+use afterpass_core::onnx::ByteSource;
+use afterpass_core::{bundle, onnx, ovir, tflite, Session};
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
@@ -11,6 +12,10 @@ fn fixture(name: &str) -> Vec<u8> {
 
 fn toy_onnx() -> Graph {
     onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap()
+}
+
+fn toy_tflite() -> Graph {
+    tflite::parse(&mut &fixture("toy.tflite")[..]).unwrap()
 }
 
 fn toy_session(bundle_file: &str) -> Session {
@@ -34,6 +39,57 @@ fn onnx_topology_without_weights() {
     assert_eq!(w.dtype, "float");
     let logits = g.tensors.iter().find(|t| t.name == "logits").unwrap();
     assert_eq!(logits.shape.as_deref(), Some(&[1, 8, 4][..]));
+}
+
+/// Counts the bytes a parser asks for.
+struct Counted<'a>(&'a [u8], u64);
+
+impl ByteSource for Counted<'_> {
+    fn len(&self) -> u64 {
+        self.0.len() as u64
+    }
+    fn read(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
+        self.1 += buf.len() as u64;
+        ByteSource::read(&mut self.0, offset, buf)
+    }
+}
+
+#[test]
+fn tflite_topology_without_weights() {
+    let bytes = fixture("toy.tflite");
+    let mut src = Counted(&bytes, 0);
+    let g = tflite::parse(&mut src).unwrap();
+    // the conv kernels (9 KiB each) are not read, except where a page holding a table overlaps them
+    assert!(src.1 + 2 * 4096 <= bytes.len() as u64, "read {} of {} bytes", src.1, bytes.len());
+    let ops: Vec<&str> = g.nodes.iter().map(|n| n.op.as_str()).collect();
+    assert_eq!(ops, ["Conv2D", "Add", "Conv2D", "Add", "Mean", "FullyConnected", "Gelu", "AfterpassToyOp"]);
+    // operators are named after their first output tensor
+    assert_eq!(g.nodes[3].name, "model/block_1/add/Add");
+    let attrs = |v: usize| g.nodes[v].attrs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>();
+    assert_eq!(attrs(0)[..4], ["padding=SAME", "stride_w=1", "stride_h=1", "fused_activation_function=RELU"]);
+    assert_eq!(attrs(6), ["approximate=true"]);
+    let t = |name: &str| g.tensors.iter().find(|t| t.name == name).unwrap();
+    let w = t("model/block_0/conv/Conv2D");
+    assert!(w.constant);
+    assert_eq!((w.dtype.as_str(), w.shape.as_deref()), ("float", Some(&[16, 3, 3, 16][..])));
+    // a weight stored after the flatbuffer (the layout of files over 2 GB) is a constant too; an empty buffer is not
+    let fc = t("model/head/dense/MatMul");
+    assert!(fc.constant);
+    assert_eq!((fc.dtype.as_str(), fc.shape.as_deref()), ("int8", Some(&[4, 16][..])));
+    assert!(!t("model/block_0/add/Add").constant);
+    assert_eq!(t("serving_default_input:0").shape.as_deref(), Some(&[-1, 8, 8, 16][..]));
+    assert_eq!(g.nodes[5].inputs[2], NONE);
+    assert_eq!(g.tensors[g.nodes[1].inputs[0] as usize].producer, 0);
+    let meta = |k: &str| g.meta.iter().find(|m| m.0 == k).map(|m| m.1.as_str());
+    assert_eq!(meta("format"), Some("TFLite, schema v3"));
+    assert_eq!(meta("subgraphs"), Some("main graph shown; not shown: decode (1 op)"));
+    assert_eq!(meta("min_runtime_version"), Some("1.14.0"));
+    assert_eq!(meta("TFLITE_METADATA.license"), Some("Apache-2.0"));
+    // names list every op the converter fused into the tensor; the first one gives the scope
+    let (preds, succs) = g.adjacency();
+    let h = Hier::build(&g, &preds, &succs, false);
+    let label = |v: usize| h.groups[h.node_group[v] as usize].label.clone();
+    assert_eq!([label(0), label(2), label(4)], ["block_0", "block_1", "head"]);
 }
 
 #[test]
@@ -93,6 +149,7 @@ fn scopes() {
     assert_eq!(scope_tokens("/model/layers.0/Add_1"), ["model", "layers", "0"]);
     assert_eq!(scope_tokens("/layer3/layer3.1/conv1/Conv"), ["layer3", "1", "conv1"]);
     assert_eq!(scope_tokens("/model.23/cv3.0/cv3.0.0/cv3.0.0.0/conv/Conv"), ["model", "23", "cv3", "0", "0", "0", "conv"]);
+    assert_eq!(scope_tokens("model/block_0/conv/Relu;model/block_0/conv/BiasAdd;model/block_0/conv/Conv2D"), ["model", "block_0", "conv"]);
 }
 
 #[test]
@@ -260,16 +317,16 @@ fn two_runtimes_compare_through_the_source() {
 /// A model opened on its own is summarised: format, weights counted from shapes, inputs, outputs, ops.
 #[test]
 fn plain_models_are_summarised() {
-    for g in [toy_onnx(), ovir::parse(&fixture("toy.xml")).unwrap()] {
+    for (g, op) in [(toy_onnx(), "MatMul x"), (ovir::parse(&fixture("toy.xml")).unwrap(), "MatMul x"), (toy_tflite(), "Conv2D x")] {
         let format = g.meta[0].1.clone();
         let s = Session::from_model(Model { source: g, ..Default::default() });
         let f = s.findings_json();
         let titles = |section: &str| f.iter().filter(|x| x["section"] == section).map(|x| x["title"].as_str().unwrap().to_string()).collect::<Vec<_>>();
-        assert!(format.starts_with("ONNX") || format.starts_with("OpenVINO IR"), "{format}");
+        assert!(["ONNX", "OpenVINO IR", "TFLite"].iter().any(|f| format.starts_with(f)), "{format}");
         assert!(titles("model").iter().any(|t| t.contains(" weights, ")), "{f:?}");
         let io = titles("io");
         assert!(io.iter().any(|t| t.starts_with("in ")) && io.iter().any(|t| t.starts_with("out ")), "{io:?}");
-        assert!(titles("ops").iter().any(|t| t.starts_with("MatMul x")), "{f:?}");
+        assert!(titles("ops").iter().any(|t| t.starts_with(op)), "{f:?}");
     }
 }
 
@@ -279,22 +336,33 @@ fn bad_inputs_are_errors_not_panics() {
     let onnx_bytes = fixture("toy.onnx");
     let xml = fixture("toy.xml");
     let json = gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"));
+    let tfl = fixture("toy.tflite");
     let open = |kind: &str, b: &[u8]| -> Result<Session, String> {
         let s = match kind {
             "onnx" => Session::from_model(Model { source: onnx::parse(&mut &b[..])?, ..Default::default() }),
+            "tflite" => Session::from_model(Model { source: tflite::parse(&mut &b[..])?, ..Default::default() }),
             "xml" => Session::from_model(Model { source: ovir::parse(b)?, ..Default::default() }),
             _ => Session::from_model(bundle::parse(b)?),
         };
         let _ = s.findings_json();
         Ok(s)
     };
-    let mut cases: Vec<(&str, Vec<u8>)> = vec![("onnx", vec![]), ("xml", vec![]), ("bundle", vec![]),
+    let mut cases: Vec<(&str, Vec<u8>)> = vec![("onnx", vec![]), ("xml", vec![]), ("bundle", vec![]), ("tflite", vec![]),
+        ("tflite", b"\x1c\0\0\0TFL3 not a flatbuffer".to_vec()), ("tflite", b"\xff\xff\xff\x7fTFL3".to_vec()),
         ("onnx", b"<html>not a model</html>".to_vec()), ("xml", b"<html><body>hi</body></html>".to_vec()),
         ("bundle", b"{\"format\": \"afterpass-bundle\", \"schema_version\": 0}".to_vec()),
         ("bundle", b"{\"format\": \"afterpass-bundle\", \"schema_version\": 0, \"provenance\": [{\"compiled\": 99, \"source\": 99}]}".to_vec())];
-    for (kind, bytes) in [("onnx", &onnx_bytes), ("xml", &xml), ("bundle", &json)] {
+    for (kind, bytes) in [("onnx", &onnx_bytes), ("xml", &xml), ("bundle", &json), ("tflite", &tfl)] {
         for cut in (0..bytes.len()).step_by(bytes.len() / 97 + 1) {
             cases.push((kind, bytes[..cut].to_vec()));
+        }
+    }
+    // a flatbuffer is offsets all the way down: damage single bytes, so offsets and lengths point anywhere
+    for at in (0..tfl.len()).step_by(7) {
+        for v in [0x00, 0x7f, 0xff] {
+            let mut b = tfl.clone();
+            b[at] = if b[at] == v { v ^ 1 } else { v };
+            cases.push(("tflite", b));
         }
     }
     // a bundle whose links point outside its graphs

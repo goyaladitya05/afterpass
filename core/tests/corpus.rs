@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use afterpass_core::analysis::data_path;
 use afterpass_core::ir::{Grade, Model, Via};
-use afterpass_core::{bundle, onnx, ovir, Session};
+use afterpass_core::{bundle, onnx, ovir, tflite, Session};
 
 fn corpus(rel: &str) -> Option<std::path::PathBuf> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../corpus").join(rel);
@@ -81,6 +81,20 @@ fn onnx_files() {
         let f = std::fs::File::open(p).unwrap();
         let len = f.metadata().unwrap().len();
         let g = onnx::parse(&mut FileSource(f, len)).unwrap();
+        let s = Session::from_model(Model { source: g, ..Default::default() });
+        report(rel, t0, &s);
+    }
+}
+
+#[test]
+fn tflite_files() {
+    for rel in ["tflite/efficientnet_lite0/efficientnet_lite0.tflite", "tflite/mobilenet_v1_quant/mobilenet_v1_1.0_224_quant.tflite"] {
+        let Some(p) = corpus(rel) else { continue };
+        let t0 = Instant::now();
+        let f = std::fs::File::open(p).unwrap();
+        let len = f.metadata().unwrap().len();
+        let g = tflite::parse(&mut FileSource(f, len)).unwrap();
+        println!("{:?}", g.meta);
         let s = Session::from_model(Model { source: g, ..Default::default() });
         report(rel, t0, &s);
     }
