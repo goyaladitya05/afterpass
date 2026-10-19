@@ -2,6 +2,7 @@ import { asciiTexture, loader, scramble, ticker } from "./chrome";
 import { buildAtlas } from "./glyphs";
 import { Kind, RAMP, Renderer, type RGBA, type Scene, sceneMaxTime, type Style, type Theme } from "./gl";
 import { type Finding, h, pressable, renderFindings, renderInspector, us } from "./panels";
+import { STALE } from "./stale";
 import type { Request } from "./worker";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
@@ -41,6 +42,11 @@ worker.onmessage = (e) => {
   waiting.delete(e.data.id);
   if (e.data.error) reject(new Error(e.data.error));
   else resolve(e.data.result);
+};
+// a worker script that fails to load (deleted by a newer deploy) never answers: fail every request instead
+worker.onerror = () => {
+  for (const [, reject] of waiting.values()) reject(new Error(STALE));
+  waiting.clear();
 };
 type NoId<T> = T extends unknown ? Omit<T, "id"> : never;
 function rpc(req: NoId<Request>): Promise<any> {
@@ -366,6 +372,18 @@ function showLanding(show: boolean, error = "") {
   if (show) $<HTMLElement>("#crumbs").textContent = "/ start";
 }
 
+/** True the first time in this tab; false after that, or when storage is blocked and a reload loop could not
+ * be prevented. */
+function firstReload(): boolean {
+  try {
+    if (sessionStorage.getItem("reloaded")) return false;
+    sessionStorage.setItem("reloaded", "1");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function load(files: File[]) {
   // an IR's .bin chosen along with its .xml is not needed: weights are never read
   files = files.filter((f) => !(f.name.endsWith(".bin") && files.some((x) => x.name === f.name.replace(/\.bin$/, ".xml"))));
@@ -420,6 +438,11 @@ async function load(files: File[]) {
     console.log(`[afterpass] load ${names}: interactive ${total.toFixed(0)} ms, worker ${res.ms.toFixed(0)} ms, transfer+upload ${(total - (tParsed - loadStart)).toFixed(0)} ms, nodes ${res.nodes.join("+")}, boxes ${boxes}, wasm ${res.wasmBytes} B, js heap ${(performance as any).memory?.usedJSHeapSize ?? "n/a"} B`);
     if (params.has("bench")) bench();
   } catch (err) {
+    // an outdated page reloads itself once; the session flag stops a loop if the reload does not help
+    if ((err as Error).message === STALE && firstReload()) {
+      location.reload();
+      return;
+    }
     // a failed load never leaves the previous model on screen, where it would pass for the new file
     console.error(err);
     paneCount = 0;

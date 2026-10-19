@@ -2,6 +2,7 @@
 // never copied), OpenVINO IR .xml whole, bundles through the browser's gzip DecompressionStream.
 
 import init, { Session } from "../pkg/afterpass_core.js";
+import { STALE } from "./stale";
 
 export type Request =
   | { id: number; op: "load"; files: File[]; flat?: boolean }
@@ -12,7 +13,11 @@ export type Request =
   | { id: number; op: "reveal"; pane: number; target: number; group: boolean };
 
 let session: Session | null = null;
-const wasm = init();
+// a deploy replaces every hashed file, so a page opened before it asks for a core that no longer exists: a 404,
+// or a host's HTML page served in its place (no wasm magic word)
+const wasm = init().catch((e) => {
+  throw new Error(/404|magic word/.test(String(e)) ? STALE : `could not start the core (${e instanceof Error ? e.message : e})`);
+});
 
 /** The file's kind from its first bytes, since names are often changed: gzip or JSON is a bundle, XML an IR,
  * a protobuf starting with field 1 (ir_version) an ONNX model. */
