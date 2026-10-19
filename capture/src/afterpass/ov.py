@@ -86,17 +86,11 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
             raise SystemExit(f"input {name} has dynamic dims, pass --shape {name}=d0,d1,...")
         specs.append((name, tuple(shapes.get(name) or p.get_shape()), p.get_element_type().to_dtype()))
 
-    t0 = time.perf_counter()
-    compiled = core.compile_model(model, device, {"PERF_COUNT": True, "PERFORMANCE_HINT": "LATENCY"})
-    compile_s = time.perf_counter() - t0
-
     feeds = random_inputs(specs)
-    req = compiled.create_infer_request()
-    # a stateful LLM keeps its KV cache between calls: reset it so every run is the same fresh prefill
-    stateful = bool(req.query_state())
     names = {s[0] for s in specs}
-    if decode and not (stateful and {"input_ids", "attention_mask"} <= names):
-        raise SystemExit("--decode needs a stateful LLM IR with input_ids and attention_mask inputs (an optimum-intel export)")
+    not_llm = "--decode needs a stateful LLM IR with input_ids and attention_mask inputs (an optimum-intel export)"
+    if decode and not {"input_ids", "attention_mask"} <= names:
+        raise SystemExit(not_llm)
     prompt = feeds["input_ids"].shape[1] if decode else 0
 
     def step_feeds(i: int) -> dict:
@@ -109,47 +103,68 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
             f["beam_idx"] = feeds["beam_idx"]
         return f
 
-    def run() -> float:
-        if stateful:
-            req.reset_state()
-        t = time.perf_counter()
-        req.infer(feeds)
-        return (time.perf_counter() - t) * 1e6
+    def measure(perf: bool):
+        """Compile, then run `warmup` and `iterations` runs (each a prefill, then `decode` steps when decoding).
+        Returns the compiled model, its request, the compile time, the timed latencies and, when `perf`, the mean
+        time per node over the timed runs or steps."""
+        t0 = time.perf_counter()
+        compiled = core.compile_model(model, device, {"PERF_COUNT": perf, "PERFORMANCE_HINT": "LATENCY"})
+        compile_s = time.perf_counter() - t0
+        req = compiled.create_infer_request()
+        # a stateful LLM keeps its KV cache between calls: reset it so every run is the same fresh prefill
+        stateful = bool(req.query_state())
+        if decode and not stateful:
+            raise SystemExit(not_llm)
 
-    # get_profiling_info() gives each node's mean over every inference since compile (all requests), not the
-    # last run's time (measured on CPU and GPU, 2026.4.1). The mean over the timed runs alone is recovered from
-    # the means before and after them.
-    def means() -> dict:
-        return {p.node_name: p.real_time.total_seconds() * 1e6 for p in req.get_profiling_info() if p.status == p.Status.EXECUTED}
+        def run() -> float:
+            if stateful:
+                req.reset_state()
+            t = time.perf_counter()
+            req.infer(feeds)
+            return (time.perf_counter() - t) * 1e6
 
-    if decode:
-        # Each run is a fresh prefill, then `decode` timed steps. The running means also count the prefills, so
-        # every decode window is bracketed: the window's total per node is n_after * mean_after - n_before *
-        # mean_before, where n counts every inference since compile.
-        done, totals, latencies = 0, {}, []
-        for it in range(warmup + iterations):
-            run()
-            done += 1
-            before = means() if it >= warmup else {}
-            for i in range(decode):
-                t = time.perf_counter()
-                req.infer(step_feeds(i))
+        # get_profiling_info() gives each node's mean over every inference since compile (all requests), not the
+        # last run's time (measured on CPU and GPU, 2026.4.1). The mean over the timed runs alone is recovered
+        # from the means before and after them.
+        def means() -> dict:
+            if not perf:
+                return {}
+            return {p.node_name: p.real_time.total_seconds() * 1e6 for p in req.get_profiling_info() if p.status == p.Status.EXECUTED}
+
+        if decode:
+            # Each run is a fresh prefill, then `decode` timed steps. The running means also count the prefills,
+            # so every decode window is bracketed: the window's total per node is n_after * mean_after - n_before
+            # * mean_before, where n counts every inference since compile.
+            done, totals, latencies = 0, {}, []
+            for it in range(warmup + iterations):
+                run()
+                done += 1
+                before = means() if it >= warmup else {}
+                for i in range(decode):
+                    t = time.perf_counter()
+                    req.infer(step_feeds(i))
+                    if it >= warmup:
+                        latencies.append((time.perf_counter() - t) * 1e6)
+                done += decode
                 if it >= warmup:
-                    latencies.append((time.perf_counter() - t) * 1e6)
-            done += decode
-            if it >= warmup:
-                for name, m in means().items():
-                    totals[name] = totals.get(name, 0.0) + done * m - (done - decode) * before.get(name, 0.0)
-        entries = req.get_profiling_info()
-        per_node = {name: max(0.0, total / (iterations * decode)) for name, total in totals.items()}
-    else:
-        for _ in range(warmup):
-            run()
-        before = means() if warmup else {}
-        latencies = [run() for _ in range(iterations)]
-        entries = req.get_profiling_info()
-        per_node = {name: max(0.0, ((warmup + iterations) * m - warmup * before.get(name, m)) / iterations)
-                    for name, m in means().items()}
+                    for name, m in means().items():
+                        totals[name] = totals.get(name, 0.0) + done * m - (done - decode) * before.get(name, 0.0)
+            per_node = {name: max(0.0, total / (iterations * decode)) for name, total in totals.items()}
+        else:
+            for _ in range(warmup):
+                run()
+            before = means() if warmup else {}
+            latencies = [run() for _ in range(iterations)]
+            per_node = {name: max(0.0, ((warmup + iterations) * m - warmup * before.get(name, m)) / iterations)
+                        for name, m in means().items()}
+        return compiled, req, compile_s, latencies, per_node
+
+    # Latency comes from a compile without PERF_COUNT: profiling slows inference (fastest runs on the Lunar Lake VM,
+    # idle: ResNet-50 GPU 1.65 against 3.1 ms, TinyLlama GPU 33.8 against 41.4 ms). The kernel times come from a
+    # second compile with it. Slicing drops the first compiled model before the second is built.
+    compile_s, latencies = measure(False)[2:4]
+    compiled, req, _, _, per_node = measure(True)
+    entries = req.get_profiling_info()
 
     # The runtime model is a snapshot: execTimeMcs is only filled if taken after an inference.
     nodes, tensors, links, ids, topology = _graph(compiled.get_runtime_model(), entries, linker)
@@ -178,7 +193,8 @@ def capture(model_path, device: str, shapes: dict, iterations: int, warmup: int,
                      "properties": props, "topology": topology, "nodes": nodes, "tensors": tensors},
         "profile": {
             "unit": "us", "iterations": iterations, "warmup": warmup,
-            "source": "get_profiling_info running means, mean per node over the timed " + ("decode steps" if decode else "runs"),
+            "source": "get_profiling_info running means, mean per node over the timed " + ("decode steps" if decode else "runs")
+            + "; latency from a separate compile without PERF_COUNT",
             **({"phase": "decode", "prompt_tokens": prompt, "decode_steps": decode} if decode else {}),
             "latency": stats(latencies),
             "nodes": {str(ids[name]): t for name, t in per_node.items() if name in ids},
