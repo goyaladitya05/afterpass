@@ -7,6 +7,7 @@ pub mod ir;
 pub mod layout;
 pub mod onnx;
 pub mod ovir;
+pub mod provenance;
 pub mod tflite;
 pub mod view;
 

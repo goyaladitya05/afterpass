@@ -6,7 +6,8 @@ use std::io::Read;
 use std::time::Instant;
 
 use afterpass_core::analysis::data_path;
-use afterpass_core::ir::{Grade, Model, Via};
+use afterpass_core::ir::{Grade, Link, Model, Via};
+use afterpass_core::provenance::Linker;
 use afterpass_core::{bundle, onnx, ovir, tflite, Session};
 
 fn corpus(rel: &str) -> Option<std::path::PathBuf> {
@@ -193,3 +194,25 @@ fn structure_accuracy() {
         }
     }
 }
+
+/// The Rust Linker against the capture's: relink every bundle's compiled claims and compare with its provenance.
+#[test]
+fn linker_matches_capture() {
+    let dirs = ["bundles", "bundles-lnl", "bundles-30b", "bundles-m7", "bundles-ort", "bundles-ov2025", "bundles-ov2026",
+        "bundles-trt10", "bundles-trt11"];
+    for (name, json) in bundles_in(&dirs) {
+        let b: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        let m = bundle::parse(&json).unwrap();
+        let linker = Linker::new(&m.source, b["source"]["format"] == "onnx");
+        let key = |l: &Link| (l.compiled, l.source, l.grade, l.via.as_str());
+        let mut ours: Vec<_> = m.compiled.as_ref().unwrap().nodes.iter().enumerate()
+            .flat_map(|(i, n)| linker.link(i as u32, &n.claims)).map(|l| key(&l)).collect();
+        let mut theirs: Vec<_> = m.links.iter().map(key).collect();
+        ours.sort_unstable();
+        theirs.sort_unstable();
+        let differ = ours.iter().zip(&theirs).filter(|(a, b)| a != b).count() + ours.len().abs_diff(theirs.len());
+        println!("{name}: {} links, {differ} differ", theirs.len());
+        assert_eq!(differ, 0, "{name}");
+    }
+}
+

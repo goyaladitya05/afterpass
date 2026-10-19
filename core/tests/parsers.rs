@@ -4,6 +4,7 @@ use afterpass_core::analysis::{data_path, linked_nodes};
 use afterpass_core::hier::{majority_scope, scope_tokens, Hier};
 use afterpass_core::ir::{Graph, Grade, Link, Model, Node, Via, NONE};
 use afterpass_core::onnx::ByteSource;
+use afterpass_core::provenance::Linker;
 use afterpass_core::{bundle, onnx, ovir, tflite, Session};
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -137,6 +138,27 @@ fn bundles() {
         assert!(f.iter().any(|x| x["section"] == "time"), "no time findings: {f:?}");
         assert!(f.iter().flat_map(|x| x["targets"].as_array().unwrap()).all(|t| t[0].as_u64().unwrap() < 2));
     }
+}
+
+/// The capture's grading rules: an exact name, a name several ops share, a tensor name, a "<name>.<port>" form, a
+/// name prefix, nothing; one link per source op, with its best grade.
+#[test]
+fn claims_are_graded_as_the_capture_grades_them() {
+    let mut g = dag(&[("A", &[]), ("B", &[0]), ("C", &[1]), ("D", &[2])]);
+    g.nodes[2].name = "n1".into();
+    let linker = Linker::new(&g, true);
+    let link = |claims: &[&str]| linker.link(7, &claims.iter().map(|c| c.to_string()).collect::<Vec<_>>()).iter()
+        .map(|l| (l.source, l.grade, l.via)).collect::<Vec<_>>();
+    assert_eq!(link(&["n0"]), [(0, Grade::Explicit, Via::Name)]);
+    assert_eq!(link(&["n1"]), [(1, Grade::Inferred, Via::Name), (2, Grade::Inferred, Via::Name)]);
+    assert_eq!(link(&["t3"]), [(3, Grade::Inferred, Via::Tensor)]);
+    assert_eq!(link(&["n0.1"]), [(0, Grade::Inferred, Via::Port)]);
+    assert_eq!(link(&["n3/transpose_b/"]), [(3, Grade::Inferred, Via::Prefix)]);
+    assert_eq!(link(&["t2/sink_port_0"]), [(2, Grade::Inferred, Via::Prefix)]);
+    assert_eq!(link(&["n3/x", "n3", "n0/y"]), [(3, Grade::Explicit, Via::Name), (0, Grade::Inferred, Via::Prefix)]);
+    assert_eq!(link(&["elsewhere", "a/b"]), [(NONE, Grade::Unknown, Via::Unknown)]);
+    // an IR source's tensors are not matched, as in the capture
+    assert_eq!(Linker::new(&g, false).link(7, &["t3".into()])[0].grade, Grade::Unknown);
 }
 
 #[test]
