@@ -47,7 +47,7 @@ def capture(args) -> None:
         except ImportError as e:
             sys.exit(f"ONNX Runtime is not available ({e}): install the extra, for example uv sync --extra onnxruntime")
         if args.device not in runtime.PROVIDERS:
-            sys.exit(f"onnxruntime captures support --device {', '.join(runtime.PROVIDERS)} (got {args.device}); the CUDA and TensorRT providers are not supported yet")
+            sys.exit(f"onnxruntime captures support --device {', '.join(runtime.PROVIDERS)} (got {args.device})")
         extra["work_dir"] = out.resolve().parent
     else:
         if not args.device.startswith("GPU"):
@@ -83,7 +83,7 @@ def main() -> None:
     c = sub.add_parser("capture", help="compile a model, profile it and write a bundle")
     c.add_argument("model", help="ONNX model (.onnx) or OpenVINO IR (.xml)")
     c.add_argument("--runtime", choices=["openvino", "tensorrt", "onnxruntime"], required=True)
-    c.add_argument("--device", default="CPU", help="CPU, GPU or an OpenVINO device name such as GPU.1 (onnxruntime: CPU)")
+    c.add_argument("--device", default="CPU", help="CPU, GPU or an OpenVINO device name such as GPU.1 (onnxruntime: CPU, CUDA or TensorRT)")
     c.add_argument("--shape", type=_shape, action="append", default=[], help="input shape override, name=d0,d1,...")
     c.add_argument("--iterations", type=int, default=50)
     c.add_argument("--warmup", type=int, default=5)

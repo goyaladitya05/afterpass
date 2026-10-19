@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 
@@ -170,3 +171,85 @@ def test_onnxruntime_fused_sum_output():
     # the activation the node names is not in the source graph: no name rather than a wrong one
     src["nodes"][2]["op"] = "Sigmoid"
     assert ort._fused_sum_output(node, tensors, Linker(src)) is None
+
+
+def gpu_providers():
+    return pytest.importorskip("onnxruntime").get_available_providers()
+
+
+@pytest.mark.parametrize("device", ["CUDA", "TensorRT"])
+def test_onnxruntime_gpu(tiny, device):
+    if "CUDAExecutionProvider" not in gpu_providers() or not bundle._gpus():
+        pytest.skip("needs onnxruntime-gpu and an NVIDIA GPU")
+    b = run_capture(tiny, "onnxruntime", device)
+    check_invariants(b)
+    nodes = b["compiled"]["nodes"]
+    assert set(b["profile"]["nodes"]) == {str(n["id"]) for n in nodes} and not b["profile"]["unmatched"]
+    assert b["profile"]["profiled_latency"]["median"] > 0 and "CUDA_LAUNCH_BLOCKING=1" in b["profile"]["source"]
+    assert explicit_sources(b) == {"conv1", "bn1", "relu1", "add1", "flat", "fc"}
+    if device == "TensorRT":  # one engine computes the whole model
+        assert [(n["op"], n["attrs"]["provider"]) for n in nodes] == [("TRTKernel", "TensorrtExecutionProvider")]
+
+
+def test_onnxruntime_device_errors(tiny):
+    def capture(device):
+        return subprocess.run([sys.executable, "-m", "afterpass", "capture", str(tiny / "tiny.onnx"), "--runtime", "onnxruntime",
+                               "--device", device, "-o", str(tiny / "x.json.gz")], capture_output=True, text=True)
+    r = capture("GPU")
+    assert r.returncode != 0 and "support --device CPU, CUDA, TensorRT (got GPU)" in r.stderr
+    if "CUDAExecutionProvider" not in gpu_providers():  # the CPU package: say which one is needed
+        r = capture("CUDA")
+        assert r.returncode != 0 and "need onnxruntime-gpu" in r.stderr
+
+
+def test_onnxruntime_provider_not_loaded():
+    ort = pytest.importorskip("afterpass.ort")
+
+    class Session:  # ONNX Runtime fell back silently: TensorRT's libraries were missing
+        def get_providers(self):
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    ort._check(Session(), "CUDA")
+    with pytest.raises(SystemExit, match="could not load TensorrtExecutionProvider and would run on CUDAExecutionProvider.*TensorRT 10"):
+        ort._check(Session(), "TensorRT")
+
+
+def test_onnxruntime_tensorrt_engines(tmp_path, monkeypatch):
+    """A TensorRT capture assembled from a recorded run: the provider took conv1 and the NonZero and Shape after it, and
+    trt_op_types_to_exclude=Relu left relu1 to CUDA (RTX 4050, onnxruntime-gpu 1.31.0, TensorRT 10.16)."""
+    ort = pytest.importorskip("afterpass.ort")
+    from afterpass import source
+    from afterpass.provenance import Linker
+    w = nh.from_array(np.zeros((16, 3, 3, 3), "float32"), "w")
+    src = h.make_graph([h.make_node("Conv", ["x", "w"], ["c"], name="conv1", pads=[1, 1, 1, 1]), h.make_node("Relu", ["c"], ["r"], name="relu1"),
+                        h.make_node("NonZero", ["r"], ["nz"], name="nonzero1"), h.make_node("Shape", ["nz"], ["y"], name="shape1")],
+                       "t", [h.make_tensor_value_info("x", T.FLOAT, [1, 3, 16, 16])], [h.make_tensor_value_info("y", T.INT64, [2])], [w])
+    onnx.save(h.make_model(src, opset_imports=[h.make_opsetid("", 17)], ir_version=10), tmp_path / "t.onnx")
+    engine = "TensorrtExecutionProvider_TRTKernel_graph_t_5127982078059117420_{0}_{0}"
+    # as ModelCompiler saves it: each engine one node, named as in the trace
+    compiled = h.make_graph([h.make_node("TRTKernel_graph_t_5127982078059117420_0", ["x"], ["c"], name=engine.format(0), domain="com.microsoft"),
+                             h.make_node("Relu", ["c"], ["r"], name="relu1"),
+                             h.make_node("TRTKernel_graph_t_5127982078059117420_1", ["r"], ["y"], name=engine.format(1), domain="com.microsoft")],
+                            "t", [h.make_tensor_value_info("x", T.FLOAT, [1, 3, 16, 16])], [h.make_tensor_value_info("y", T.INT64, [2])])
+    ran = [(engine.format(0), "TensorrtExecutionProvider", {"float": [1, 16, 16, 16]}), ("relu1", "CUDAExecutionProvider", {"float": [1, 16, 16, 16]}),
+           (engine.format(1), "TensorrtExecutionProvider", {"int64": [2]})]
+    trace = [e for ts in (0, 100) for e in [{"cat": "Session", "name": "model_run", "ts": ts, "dur": 50}] + [
+        {"cat": "Node", "name": f"{n}_kernel_time", "ts": ts + k + 1, "dur": 10, "args": {"provider": p, "output_type_shape": [s]}}
+        for k, (n, p, s) in enumerate(ran)]]
+
+    def measure(model_path, device, shapes, iterations, warmup, tmp):
+        onnx.save(h.make_model(compiled, opset_imports=[h.make_opsetid("", 17)], ir_version=10), tmp / "optimized.onnx")
+        (tmp / "trace.json").write_text(json.dumps(trace))
+        return 1.0, [30.0], {"trace": str(tmp / "trace.json"), "providers": ort.PROVIDERS["TensorRT"], "options": {},
+                             "assignment": [["TensorrtExecutionProvider", ["conv1"]], ["TensorrtExecutionProvider", ["nonzero1", "shape1"]],
+                                            ["CUDAExecutionProvider", ["relu1"]]]}
+    monkeypatch.setattr(ort, "_measure", measure)
+    monkeypatch.setattr(ort.ort, "get_available_providers", lambda: ort.PROVIDERS["TensorRT"])
+    r = ort.capture(tmp_path / "t.onnx", "TensorRT", {}, 1, 1, Linker(source.load(tmp_path / "t.onnx")), work_dir=tmp_path)
+    nodes = r["compiled"]["nodes"]
+    assert [(n["op"], n["kernel"], n["claims"][1:]) for n in nodes] == [
+        ("TRTKernel", "Tensorrt TRTKernel", ["conv1"]), ("Relu", "CUDA Relu", ["r"]), ("TRTKernel", "Tensorrt TRTKernel", ["nonzero1", "shape1"])]
+    assert {(l["compiled"], l["source"], l["grade"]) for l in r["links"]} == {(0, 0, "explicit"), (1, 1, "explicit"), (2, 2, "explicit"), (2, 3, "explicit")}
+    assert r["profile"]["nodes"] == {"0": 10.0, "1": 10.0, "2": 10.0} and r["profile"]["profiled_latency"]["median"] == 50
+    assert r["compiled"]["tensors"]["y"]["dtype"] == "int64"
+    # an engine number past the assignment claims nothing rather than another engine's nodes
+    assert ort._engine_nodes(engine.format(2), [["a"], ["b"]]) == []
