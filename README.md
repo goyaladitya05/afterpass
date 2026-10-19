@@ -14,7 +14,7 @@ Runtimes: OpenVINO (CPU, GPU, NPU) and TensorRT (10 and 11).
 
 ## Open a model
 
-The viewer is a static web page. Everything runs in your browser; nothing is uploaded, and the page's Content Security Policy forbids it from sending data anywhere. Drop in one of these:
+The viewer is a static web page. Everything runs in your browser; nothing is uploaded, and the page's Content Security Policy forbids it from sending data anywhere. It reads files and never compiles anything: a compiled graph always comes from `afterpass capture`, run on a machine with the runtime and the hardware. Drop in one of these:
 
 * an ONNX model or an OpenVINO IR `.xml`, to browse its graph;
 * a bundle from `afterpass capture` (below), to see the compiled graph, provenance and timing;

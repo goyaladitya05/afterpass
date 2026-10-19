@@ -160,6 +160,12 @@ pub struct Model {
     pub device: String,
     /// Runtime version without its build suffix, for example "2026.4.1".
     pub version: String,
+    /// The device's full name, for example "Intel(R) Arc(TM) 140V GPU (16GB)".
+    pub device_name: String,
+    /// Capture date, `YYYY-MM-DD`.
+    pub captured: String,
+    /// File name of the model that was captured.
+    pub model_file: String,
     /// Median whole-inference latency, when profiled.
     pub latency_us: Option<f32>,
     /// Fastest and slowest inference of the profiled runs.

@@ -68,7 +68,8 @@ impl Session {
             }
             let inferred = analysis::infer_structure(&s.panes[0], &s.panes[1], &mut links);
             s.links.push(links);
-            s.sides.push(Side { label: m.label, runtime: m.runtime, device: m.device, version: m.version, latency_us: m.latency_us, latency_range: m.latency_range, inferred });
+            s.sides.push(Side { label: m.label, runtime: m.runtime, device: m.device, version: m.version, device_name: m.device_name,
+                captured: m.captured, model_file: m.model_file, latency_us: m.latency_us, latency_range: m.latency_range, inferred });
         }
         s
     }
@@ -150,6 +151,15 @@ impl Session {
     /// Runtime, version and device of a compiled pane; empty for the source pane.
     pub fn label(&self, pane: usize) -> String {
         self.side(pane).map_or(String::new(), |s| s.label.clone())
+    }
+
+    /// Who compiled a compiled pane, for its header: JSON with runtime, version, device, device_name, captured and
+    /// model; `{}` for a source pane.
+    pub fn about(&self, pane: usize) -> String {
+        self.side(pane).map_or("{}".into(), |s| serde_json::json!({
+            "runtime": s.runtime, "version": s.version, "device": s.device, "device_name": s.device_name,
+            "captured": s.captured, "model": s.model_file,
+        }).to_string())
     }
 
     pub fn latency_us(&self, pane: usize) -> f32 {

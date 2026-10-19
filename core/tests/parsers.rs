@@ -66,6 +66,11 @@ fn bundles() {
             assert_eq!(sc.boxes.len(), sc.kinds.len() * 4);
             assert!(sc.width > 0.0 && sc.height > 0.0);
         }
+        // the compiled pane says who compiled what, and when; the source pane was compiled by no one
+        let about: serde_json::Value = serde_json::from_str(&s.about(1)).unwrap();
+        assert!(["openvino", "tensorrt"].contains(&about["runtime"].as_str().unwrap()), "{about}");
+        assert_eq!((about["model"].as_str(), about["captured"].as_str().map(str::len)), (Some("toy.onnx"), Some(10)), "{about}");
+        assert_eq!(s.about(0), "{}");
         let f = s.findings_json();
         assert!(f.iter().any(|x| x["section"] == "time"), "no time findings: {f:?}");
         assert!(f.iter().flat_map(|x| x["targets"].as_array().unwrap()).all(|t| t[0].as_u64().unwrap() < 2));

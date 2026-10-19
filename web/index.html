@@ -47,6 +47,7 @@
           <div class="pane-head"><span class="num">002</span><span class="title">compiled</span><span class="meta"></span></div>
           <canvas></canvas>
           <ul class="legend"></ul>
+          <div class="uncompiled" id="uncompiled" hidden></div>
         </section>
         <section class="pane" data-pane="2">
           <div class="pane-head"><span class="num">003</span><span class="title">compiled</span><span class="meta"></span></div>
@@ -73,17 +74,18 @@
       <div class="landing-inner">
         <p class="label">compiler explorer for model graphs</p>
         <h1>afterpass</h1>
-        <p class="lead">See what a deployment compiler did to your model. Source graph next to compiled graph, every fused kernel traced back to the ops it came from.</p>
+        <p class="lead">See what a deployment compiler did to your model: the graph you exported next to the graph OpenVINO or TensorRT actually runs, every fused kernel traced back to the ops it came from.</p>
+        <div class="load-error" id="load-error" role="alert" hidden></div>
         <div class="cta">
-          <button class="btn" id="open-landing"><span data-label="open a model">open a model</span></button>
+          <button class="btn" id="open-landing"><span data-label="open a file">open a file</span></button>
           <span class="faint">or drop files anywhere. Nothing is uploaded; weights are never read.</span>
         </div>
         <ol class="steps">
-          <li><span class="num">001</span><b>capture</b><span>Compile with OpenVINO or TensorRT and profile it: <code>afterpass capture model.onnx --runtime tensorrt --device GPU</code></span></li>
-          <li><span class="num">002</span><b>open</b><span>Load a bundle here, or an ONNX model or OpenVINO IR on its own. Load two bundles of one model to compare runtimes, devices or versions.</span></li>
-          <li><span class="num">003</span><b>trace</b><span>Click a kernel to see its source ops. Findings list time sinks, unaccounted ops, inserted reorders and precision fallbacks.</span></li>
+          <li><span class="num">001</span><b>your model</b><span>An ONNX model or OpenVINO IR. Opened here on its own, it shows the source graph only: this page reads files, it never compiles anything.</span></li>
+          <li><span class="num">002</span><b>capture</b><span>On a machine with the runtime and the hardware, <code>afterpass capture</code> compiles the model with OpenVINO or TensorRT, times every kernel and writes a bundle: <code>afterpass capture model.onnx --runtime openvino --device CPU</code></span></li>
+          <li><span class="num">003</span><b>open the bundle</b><span>Source and compiled side by side, each kernel traced to its source ops, with time sinks, unfused ops and precision changes listed. Open two bundles of one model to compare runtimes, devices or versions.</span></li>
         </ol>
-        <div class="demos" id="demos" hidden><p class="label">demos</p><ul></ul></div>
+        <div class="demos" id="demos" hidden><p class="label">demos: bundles captured ahead of time on the hardware named</p><ul></ul></div>
       </div>
       <div class="ticker" aria-hidden="true"><div class="ticker-track"></div></div>
     </section>

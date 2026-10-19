@@ -322,8 +322,47 @@ function report(wasmBytes: number) {
 /** "openvino 2026.4.1 GPU Intel(R) Arc(TM) 140V" gives "openvino 2026.4.1 GPU" (the pane heads carry the rest). */
 const short = (label: string) => label.split(" ").slice(0, 3).join(" ");
 
-function showLanding(show: boolean) {
+/** What a bundle says about its capture (`Session.about`); empty for a source pane. */
+type About = { runtime?: string; version?: string; device?: string; device_name?: string; captured?: string; model?: string };
+const RUNTIMES: Record<string, string> = { openvino: "OpenVINO", tensorrt: "TensorRT" };
+/** "Intel(R) Arc(TM) 140V GPU (16GB)" gives "Intel Arc 140V GPU (16GB)". */
+const tidy = (name: string) => name.replace(/\((R|TM)\)/g, "").replace(/\s+/g, " ").trim();
+
+/** A compiled pane's title and first words of its header: who compiled it, for which device, and when. */
+function compiledBy(a: About): [string, string] {
+  const device = a.device_name ? `on ${tidy(a.device_name)} (${a.device})` : `on ${a.device}`;
+  return [`compiled by ${RUNTIMES[a.runtime ?? ""] ?? a.runtime} ${a.version}`, `${device}${a.captured ? `, captured ${a.captured}` : ""}`];
+}
+
+const INSTALL = `uv tool install "git+https://github.com/goyaladitya05/afterpass#subdirectory=capture"`;
+
+/** The compiled pane of a lone model file: nothing compiled it, and how to get a compiled graph. */
+function showUncompiled(file: string | null) {
+  const el = $<HTMLElement>("#uncompiled");
+  el.hidden = !file;
+  if (!file) return;
+  const command = (text: string) => {
+    const copy = h("button", { class: "copy" }, "copy");
+    copy.addEventListener("click", () => navigator.clipboard.writeText(text).then(() => (copy.textContent = "copied"), () => undefined));
+    return h("div", { class: "command" }, h("code", {}, text), copy);
+  };
+  const capture = (runtime: string, device: string) => command(`afterpass capture ${file} --runtime ${runtime} --device ${device}`);
+  el.replaceChildren(
+    h("p", { class: "label" }, "not compiled"),
+    h("p", {}, "Nothing has compiled this model. This page only reads files; a compiled graph comes from running the model through a runtime on real hardware, with afterpass capture."),
+    h("p", {}, "To see what OpenVINO does to it, on a machine with an Intel CPU, GPU or NPU:"),
+    capture("openvino", "CPU"),
+    ...(file.toLowerCase().endsWith(".xml") ? [] : [h("p", {}, "To see what TensorRT does to it, on a machine with an NVIDIA GPU:"), capture("tensorrt", "GPU")]),
+    h("p", {}, "Then open the .afterpass.json.gz it writes. Install the capture tool once with:"),
+    command(INSTALL),
+  );
+}
+
+function showLanding(show: boolean, error = "") {
   landing.hidden = !show;
+  const box = $<HTMLElement>("#load-error");
+  box.hidden = !error;
+  box.textContent = error;
   if (show) $<HTMLElement>("#crumbs").textContent = "/ start";
 }
 
@@ -343,22 +382,29 @@ async function load(files: File[]) {
     paneCount = res.scenes.length;
     latencies = res.latencies;
     const labels: string[] = res.labels;
+    const abouts: About[] = res.abouts;
     paneNames = paneCount === 3 ? ["source", "A", "B"] : paneCount === 2 ? (labels[1] ? ["source", "compiled"] : ["graph a", "graph b"]) : ["source"];
-    panesEl.classList.toggle("single", paneCount < 2);
     panesEl.classList.toggle("triple", paneCount === 3);
+    showUncompiled(paneCount === 1 ? files[0].name : null);
     const names = files.map((f) => f.name).join(" + ");
     $<HTMLElement>("#crumbs").textContent = paneCount === 3 ? `/ compare / A ${short(labels[1])} / B ${short(labels[2])}` : `/ ${names}${labels[1] ? " / " + labels[1] : ""}`;
     selection = null;
+    // every header says what the pane is: the model as exported, or who compiled it for which device
+    const model = abouts[1]?.model || (paneCount === 1 ? files[0].name : "");
     panes.forEach(({ el, r, style }, p) => {
       style.selected = -1;
       style.linked = new Map();
       r.resize();
       r.scene = res.scenes[p] ?? null;
       r.fit();
-      const lat = latencies[p] === latencies[p] && latencies[p] !== undefined ? `  latency ${us(latencies[p])}` : "";
-      const label = paneCount === 3 && labels[p] ? `${labels[p]}  ` : "";
-      el.querySelector(".meta")!.textContent = res.nodes[p] !== undefined ? `${label}${res.nodes[p]} nodes${lat}` : "";
-      el.querySelector(".title")!.textContent = paneNames[p] ?? "";
+      const lat = latencies[p] === latencies[p] && latencies[p] !== undefined ? `, latency ${us(latencies[p])}` : "";
+      let [title, what] = [paneNames[p] ?? "", ""];
+      if (abouts[p]?.runtime) {
+        const [by, on] = compiledBy(abouts[p]);
+        [title, what] = [paneCount === 3 ? `${paneNames[p]}: ${by}` : by, `${on}, `];
+      } else if (p === 0 && model) what = `${model} as exported, not compiled, `;
+      el.querySelector(".title")!.textContent = p === 1 && paneCount === 1 ? "compiled" : title;
+      el.querySelector(".meta")!.textContent = res.nodes[p] !== undefined ? `${what}${res.nodes[p]} nodes${lat}` : "";
     });
     overlaySel.value = latencies.some((l) => l === l) ? "time" : "none";
     await applyOverlay();
@@ -374,10 +420,16 @@ async function load(files: File[]) {
     console.log(`[afterpass] load ${names}: interactive ${total.toFixed(0)} ms, worker ${res.ms.toFixed(0)} ms, transfer+upload ${(total - (tParsed - loadStart)).toFixed(0)} ms, nodes ${res.nodes.join("+")}, boxes ${boxes}, wasm ${res.wasmBytes} B, js heap ${(performance as any).memory?.usedJSHeapSize ?? "n/a"} B`);
     if (params.has("bench")) bench();
   } catch (err) {
-    say((err as Error).message, true);
+    // a failed load never leaves the previous model on screen, where it would pass for the new file
     console.error(err);
-    if (!paneCount) showLanding(true);
-    else loadFindings(); // the previous model stays on screen
+    paneCount = 0;
+    selection = null;
+    $("#findings-body").replaceChildren();
+    showLanding(true, (err as Error).message);
+    landing.scrollTop = 0;
+    perf.textContent = "";
+    delete perf.dataset.load;
+    say("");
   } finally {
     loading = false;
     $<HTMLElement>("#loading").hidden = true;
@@ -461,7 +513,7 @@ async function start() {
   const fileInput = $<HTMLInputElement>("#file");
   for (const id of ["#open", "#open-landing"]) $(id).addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => load([...(fileInput.files ?? [])]));
-  $("#home").addEventListener("click", () => showLanding(landing.hidden !== false));
+  $("#home").addEventListener("click", () => showLanding(!paneCount || landing.hidden !== false));
   window.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("drag"); });
   window.addEventListener("dragleave", () => document.body.classList.remove("drag"));
   window.addEventListener("drop", (e) => {

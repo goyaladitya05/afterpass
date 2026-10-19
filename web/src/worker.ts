@@ -81,7 +81,8 @@ async function handle(req: Request): Promise<[unknown, Transferable[]]> {
     const all = Array.from({ length: panes }, (_, p) => p);
     const nodes = all.map((p) => session!.node_count(p));
     const labels = all.map((p) => session!.label(p)), latencies = all.map((p) => session!.latency_us(p));
-    return [{ scenes, nodes, labels, latencies, ms: performance.now() - t0, wasmBytes: memory.buffer.byteLength }, transfer];
+    const abouts = all.map((p) => JSON.parse(session!.about(p)));
+    return [{ scenes, nodes, labels, latencies, abouts, ms: performance.now() - t0, wasmBytes: memory.buffer.byteLength }, transfer];
   }
   if (!session) throw new Error("nothing loaded");
   const ses = session;

@@ -350,11 +350,12 @@ export class Renderer {
   fit() {
     if (!this.scene) return;
     const dpr = window.devicePixelRatio || 1;
-    const cw = this.canvas.width / dpr, ch = this.canvas.height / dpr, m = 40;
-    const z = Math.min((cw - m) / Math.max(this.scene.width, 1), (ch - m - 30) / Math.max(this.scene.height, 1), 1.25);
+    // head: room for the pane header (a title and up to two lines on who compiled it)
+    const cw = this.canvas.width / dpr, ch = this.canvas.height / dpr, m = 40, head = 56;
+    const z = Math.min((cw - m) / Math.max(this.scene.width, 1), (ch - m - head) / Math.max(this.scene.height, 1), 1.25);
     this.view.zoom = z;
     this.view.x = this.scene.width / 2 - cw / 2 / z;
-    this.view.y = -(m / 2 + 30) / z;
+    this.view.y = -(m / 2 + head) / z;
     this.requestDraw();
   }
 
