@@ -1,6 +1,6 @@
 //! Analysis over a loaded session: structural provenance, overlay categories, Findings, search, inspection.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{json, Value};
 
@@ -150,6 +150,98 @@ fn narrow(src: &Pane, cmp: &Pane, links: &Links, region: &[usize], cluster: &[u3
         let ks: Vec<u32> = (0..c).filter(|&j| b[j / 64] >> (j % 64) & 1 == 1).map(|j| cluster[j]).collect();
         if ks.is_empty() { fits(v) } else { ks }
     }).collect()
+}
+
+/// Links derived from tensor names, before any guessing. TensorRT names most tensors at kernel boundaries after the
+/// ONNX tensors they carry (OpenVINO's runtime model keeps none). When every data input and output of a kernel maps
+/// to a source tensor, walking the source graph back from its outputs and stopping at its inputs finds exactly the
+/// ops it computed. Inserted reformat kernels are looked through. A kernel whose derived ops do not include what it
+/// explicitly claims is skipped: its boundary is not what it seems. Returns how many source ops gained a link.
+pub fn infer_boundaries(src: &Pane, cmp: &Pane, links: &mut Links) -> usize {
+    let (sg, cg) = (&src.graph, &cmp.graph);
+    // an unnamed OpenVINO tensor falls back to its "<node>:<port>" id, in both graphs: ids are not names
+    let real = |name: &str| !name.split(':').all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_digit()));
+    let by_name: HashMap<&str, u32> = (0..sg.tensors.len()).filter(|&t| real(&sg.tensors[t].name))
+        .map(|t| (sg.tensors[t].name.as_str(), t as u32)).collect();
+    // the source tensor a compiled tensor carries, through kernels that only move data
+    let resolve = |mut t: u32| -> Option<u32> {
+        for _ in 0..8 {
+            if let Some(&s) = by_name.get(cg.tensors[t as usize].name.as_str()) {
+                return Some(s);
+            }
+            let p = cg.tensors[t as usize].producer;
+            if p == NONE || !MOVE_KERNELS.contains(&cg.nodes[p as usize].op.as_str()) {
+                return None;
+            }
+            t = *cg.nodes[p as usize].inputs.iter().find(|&&i| i != NONE)?;
+        }
+        None
+    };
+    // TensorRT writes a concatenation in place: each branch's kernel writes its slice of the Concat's output, so
+    // several kernels list that tensor. A kernel then owns only part of its output, and the walk would take in
+    // every branch.
+    let mut writers = vec![0u32; cg.tensors.len()];
+    for n in &cg.nodes {
+        for &t in &n.outputs {
+            writers[t as usize] += 1;
+        }
+    }
+    let mut gained = vec![false; sg.nodes.len()];
+    for k in (0..cg.nodes.len()).filter(|&k| data_path(cmp, k) && !MOVE_KERNELS.contains(&cg.nodes[k].op.as_str())) {
+        let node = &cg.nodes[k];
+        if node.outputs.iter().any(|&t| writers[t as usize] > 1) {
+            continue;
+        }
+        let Some(outs) = node.outputs.iter().map(|&t| resolve(t)).collect::<Option<Vec<u32>>>() else { continue };
+        // a data input must be named; an input nothing produces and no name matches is a weight
+        let mut stop = HashSet::new();
+        let complete = node.inputs.iter().filter(|&&t| t != NONE).all(|&t| match resolve(t) {
+            Some(s) => {
+                stop.insert(s);
+                true
+            }
+            None => cg.tensors[t as usize].producer == NONE,
+        });
+        if outs.is_empty() || !complete {
+            continue;
+        }
+        let (mut ops, mut stack, mut seen) = (Vec::new(), outs.clone(), HashSet::new());
+        let mut escaped = false;
+        while let Some(t) = stack.pop() {
+            if stop.contains(&t) || !seen.insert(t) {
+                continue;
+            }
+            let p = sg.tensors[t as usize].producer;
+            // a graph input that is not one of the kernel's inputs (ONNX: an unproduced non-weight tensor; IR: a
+            // Parameter) means the boundary is incomplete
+            if p == NONE || IO.contains(&sg.nodes[p as usize].op.as_str()) {
+                escaped |= p != NONE || !sg.tensors[t as usize].constant;
+                continue;
+            }
+            if data_path(src, p as usize) {
+                ops.push(p);
+            }
+            stack.extend(sg.nodes[p as usize].inputs.iter().copied().filter(|&i| i != NONE));
+            if ops.len() > 10_000 {
+                escaped = true;
+                break;
+            }
+        }
+        ops.sort_unstable();
+        ops.dedup();
+        let claimed = |l: &&LinkRef| l.via != Via::Structure && l.via != Via::Boundary;
+        if escaped || !links[1][k].iter().filter(claimed).all(|l| ops.binary_search(&l.other).is_ok()) {
+            continue;
+        }
+        for v in ops {
+            if !links[1][k].iter().any(|l| l.other == v) {
+                links[0][v as usize].push(LinkRef { other: k as u32, grade: Grade::Inferred, via: Via::Boundary });
+                links[1][k].push(LinkRef { other: v, grade: Grade::Inferred, via: Via::Boundary });
+                gained[v as usize] = links[0][v as usize].iter().all(|l| l.via == Via::Boundary);
+            }
+        }
+    }
+    gained.iter().filter(|&&g| g).count()
 }
 
 /// Recover links the runtime's names lost, in two passes, all graded inferred via structure.
@@ -447,6 +539,8 @@ pub struct Side {
     pub latency_range: Option<(f32, f32)>,
     /// Source ops linked by structure rather than by name.
     pub inferred: usize,
+    /// Source ops linked only through named kernel boundaries (`infer_boundaries`).
+    pub derived: usize,
 }
 
 const QDQ: [&str; 3] = ["QuantizeLinear", "DequantizeLinear", "FakeQuantize"];
@@ -672,6 +766,10 @@ fn side_findings(s: &Pane, c: &Pane, pane: usize, links: &Links, side: &Side, ta
         out.push(item("unaccounted", "warn", format!("{tag}{op}  x{}", vs.len()),
             "no kernel claims these ops and structure cannot place them (their outputs reach several kernels, or none): unfused, eliminated, or names lost".into(),
             targets(0, &vs)));
+    }
+    if side.derived > 0 {
+        out.push(item("unaccounted", "info", format!("{tag}{} ops placed by tensor names", side.derived),
+            "unclaimed ops between a kernel's input and output tensors, which kept their source names: computed in that kernel; graded inferred".into(), vec![]));
     }
     if side.inferred > 0 {
         out.push(item("unaccounted", "info", format!("{tag}{} ops linked by structure", side.inferred),

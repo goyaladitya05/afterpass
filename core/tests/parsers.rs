@@ -150,11 +150,40 @@ fn dag(nodes: &[(&str, &[usize])]) -> Graph {
     g
 }
 
-/// The structure links of each source op, given the runtime's explicit (kernel, op) links.
-fn inferred(src: Graph, cmp: Graph, named: &[(u32, u32)]) -> Vec<Vec<u32>> {
+/// The structure links of each source op, given the runtime's explicit (kernel, op) links. Compiled tensors are
+/// renamed so that no kernel boundary carries a source tensor name: only structure can place ops.
+fn inferred(src: Graph, mut cmp: Graph, named: &[(u32, u32)]) -> Vec<Vec<u32>> {
+    for t in &mut cmp.tensors {
+        t.name = format!("kernel {}", t.name);
+    }
     let links = named.iter().map(|&(compiled, source)| Link { compiled, source, grade: Grade::Explicit, via: Via::Name }).collect();
     let s = Session::from_model(Model { source: src, compiled: Some(cmp), links, ..Default::default() });
     s.links()[0][0].iter().map(|l| l.iter().filter(|l| l.via == Via::Structure).map(|l| l.other).collect()).collect()
+}
+
+/// A kernel whose input and output tensors kept their source names computed exactly the ops between them.
+#[test]
+fn named_kernel_boundaries_place_ops() {
+    // source x -> a -> b -> c -> d; one nameless kernel reads x and writes c's output, a second one writes d's
+    let src = dag(&[("Op", &[]), ("Op", &[0]), ("Op", &[1]), ("Op", &[2])]);
+    let mut cmp = dag(&[("K", &[]), ("K", &[0])]);
+    let out = cmp.nodes[0].outputs[0] as usize;
+    cmp.tensors[out].name = "t2".into();
+    let s = Session::from_model(Model { source: src, compiled: Some(cmp), ..Default::default() });
+    let l = &s.links()[0][0];
+    for v in 0..3 {
+        assert_eq!(l[v].iter().map(|l| (l.other, l.via)).collect::<Vec<_>>(), [(0, Via::Boundary)], "op {v}: {l:?}");
+    }
+    // the second kernel's output kept no source name: nothing is derived for it
+    assert!(l[3].iter().all(|l| l.via != Via::Boundary), "{l:?}");
+    // two kernels writing one tensor (TensorRT's in-place concat): neither owns it, nothing is derived
+    let src = dag(&[("Op", &[]), ("Op", &[0]), ("Op", &[1]), ("Op", &[2])]);
+    let mut cmp = dag(&[("K", &[]), ("K", &[0])]);
+    let shared = cmp.nodes[0].outputs[0];
+    cmp.tensors[shared as usize].name = "t2".into();
+    cmp.nodes[1].outputs = vec![shared];
+    let s = Session::from_model(Model { source: src, compiled: Some(cmp), ..Default::default() });
+    assert!(s.links()[0][0].iter().flatten().all(|l| l.via != Via::Boundary), "{:?}", s.links()[0][0]);
 }
 
 /// A kernel that only moves data is not credited with a compute op.

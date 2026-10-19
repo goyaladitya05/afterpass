@@ -66,10 +66,11 @@ impl Session {
                     links[1][l.compiled as usize].push(LinkRef { other: l.source, grade: l.grade, via: l.via });
                 }
             }
+            let derived = analysis::infer_boundaries(&s.panes[0], &s.panes[1], &mut links);
             let inferred = analysis::infer_structure(&s.panes[0], &s.panes[1], &mut links);
             s.links.push(links);
             s.sides.push(Side { label: m.label, runtime: m.runtime, device: m.device, version: m.version, device_name: m.device_name,
-                captured: m.captured, model_file: m.model_file, latency_us: m.latency_us, latency_range: m.latency_range, inferred });
+                captured: m.captured, model_file: m.model_file, latency_us: m.latency_us, latency_range: m.latency_range, inferred, derived });
         }
         s
     }

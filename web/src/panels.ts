@@ -126,7 +126,7 @@ export function renderInspector(main: HTMLElement, side: HTMLElement, meta: HTML
     const ul = h("ul", { class: "links" });
     for (const l of g.links) {
       const li = h("li", { title: `${l.grade}${l.via ? ` via ${l.via}` : ""}` },
-        h("span", { class: `chip ${l.grade}` }, l.via === "structure" ? "struct" : l.grade),
+        h("span", { class: `chip ${l.grade}` }, l.via === "structure" ? "struct" : l.via === "boundary" ? "tensors" : l.grade),
         h("span", {}, `${l.op}  ${l.name}`), h("span", { class: "faint" }, us(l.time_us)));
       pressable(li, () => follow(g.pane, l.node));
       ul.append(li);

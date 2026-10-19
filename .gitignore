@@ -16,6 +16,7 @@ docs/
 
 # build output and environments
 target/
+.claude/
 node_modules/
 dist/
 pkg/

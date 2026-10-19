@@ -115,6 +115,8 @@ pub enum Via {
     Tensor,
     Prefix,
     Port,
+    /// The kernel's input and output tensors kept their source names; the op lies between them.
+    Boundary,
     Structure,
     Unknown,
 }
@@ -136,6 +138,7 @@ impl Via {
             Via::Tensor => "tensor",
             Via::Prefix => "prefix",
             Via::Port => "port",
+            Via::Boundary => "boundary",
             Via::Structure => "structure",
             Via::Unknown => "",
         }
