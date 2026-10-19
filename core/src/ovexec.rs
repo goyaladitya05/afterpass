@@ -48,8 +48,8 @@ pub fn compiled(xml: &[u8]) -> Result<Graph, String> {
         }
         n.attrs.retain(|(k, _)| !RT_KEYS.contains(&k.as_str()));
     }
-    // A kernel that only computes constants runs once, when the first inference prepares them; the runtime's
-    // profiling entries (what a capture times) leave such kernels out, so their time is not per inference.
+    // Kernels that only compute constants (TinyLlama on CPU: 44 Reorders of constants) carry a time here but are
+    // missing from the runtime's profiling entries, which a capture times; drop it, so both count the same kernels.
     let constant = g.constant_nodes();
     for (n, constant) in g.nodes.iter_mut().zip(constant) {
         if constant {
