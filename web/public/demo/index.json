@@ -1,14 +1,94 @@
 [
-  {"title": "compare: TinyLlama, TensorRT on RTX 4050 vs OpenVINO on Arc 140V", "files": ["demo/tinyllama-1.1b.tensorrt-gpu.afterpass.json.gz", "demo/tinyllama-1.1b.openvino-gpu.afterpass.json.gz"]},
-  {"title": "compare: ResNet-50 INT8, TensorRT 10.16 vs 11.4 on one GPU", "files": ["demo/resnet50-int8.tensorrt-10.16-gpu.afterpass.json.gz", "demo/resnet50-int8.tensorrt-11.4-gpu.afterpass.json.gz"]},
-  {"title": "compare: ResNet-50 INT8, TensorRT on RTX 4050 vs OpenVINO on Arc 140V", "files": ["demo/resnet50-int8.tensorrt-11.4-gpu.afterpass.json.gz", "demo/resnet50-int8.openvino-gpu.afterpass.json.gz"]},
-  {"title": "compare: TinyLlama, Lunar Lake CPU vs its Arc 140V GPU", "files": ["demo/tinyllama-1.1b.openvino-cpu.afterpass.json.gz", "demo/tinyllama-1.1b.openvino-gpu.afterpass.json.gz"]},
-  {"title": "compare: TinyLlama, OpenVINO 2025.3 vs 2026.4 on one CPU", "files": ["demo/tinyllama-1.1b.openvino-2025.3-cpu.afterpass.json.gz", "demo/tinyllama-1.1b.openvino-2026.4-cpu.afterpass.json.gz"]},
-  {"title": "compare: YOLO11n, TensorRT vs OpenVINO GPU", "files": ["demo/yolo11n.tensorrt-gpu.afterpass.json.gz", "demo/yolo11n.openvino-gpu.afterpass.json.gz"]},
-  {"title": "Qwen2.5-32B (dense), OpenVINO, AMD EPYC CPU", "files": ["demo/qwen2.5-32b.openvino-cpu.afterpass.json.gz"]},
-  {"title": "Qwen3-30B-A3B (MoE), OpenVINO, Arc 140V GPU", "files": ["demo/qwen3-30b-a3b.openvino-gpu.afterpass.json.gz"]},
-  {"title": "TinyLlama 1.1B, TensorRT, RTX 4050", "files": ["demo/tinyllama-1.1b.tensorrt-gpu.afterpass.json.gz"]},
-  {"title": "YOLO11n, TensorRT, RTX 4050", "files": ["demo/yolo11n.tensorrt-gpu.afterpass.json.gz"]},
-  {"title": "ResNet-50, OpenVINO, Core Ultra 7 258V CPU", "files": ["demo/resnet50.openvino-cpu.afterpass.json.gz"]},
-  {"title": "BERT base, OpenVINO, Lunar Lake NPU", "files": ["demo/bert-base.openvino-npu.afterpass.json.gz"]}
+ {
+  "title": "compare: TinyLlama, TensorRT on RTX 4050 vs OpenVINO on Arc 140V",
+  "files": [
+   "demo/tinyllama-1.1b.tensorrt-gpu.afterpass.json.gz",
+   "demo/tinyllama-1.1b.openvino-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "compare: ResNet-50 INT8, TensorRT 10.16 vs 11.4 on one GPU",
+  "files": [
+   "demo/resnet50-int8.tensorrt-10.16-gpu.afterpass.json.gz",
+   "demo/resnet50-int8.tensorrt-11.4-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "compare: ResNet-50 INT8, TensorRT on RTX 4050 vs OpenVINO on Arc 140V",
+  "files": [
+   "demo/resnet50-int8.tensorrt-11.4-gpu.afterpass.json.gz",
+   "demo/resnet50-int8.openvino-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "compare: TinyLlama, Lunar Lake CPU vs its Arc 140V GPU",
+  "files": [
+   "demo/tinyllama-1.1b.openvino-cpu.afterpass.json.gz",
+   "demo/tinyllama-1.1b.openvino-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "compare: TinyLlama, OpenVINO 2025.3 vs 2026.4 on one CPU",
+  "files": [
+   "demo/tinyllama-1.1b.openvino-2025.3-cpu.afterpass.json.gz",
+   "demo/tinyllama-1.1b.openvino-2026.4-cpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "compare: YOLO11n, TensorRT vs OpenVINO GPU",
+  "files": [
+   "demo/yolo11n.tensorrt-gpu.afterpass.json.gz",
+   "demo/yolo11n.openvino-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "compare: TinyLlama int4, prefill vs decode on the Arc 140V GPU",
+  "files": [
+   "demo/tinyllama-int4.openvino-gpu.afterpass.json.gz",
+   "demo/tinyllama-int4.openvino-gpu-decode.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "compare: TinyLlama int4 decode, Lunar Lake CPU vs its Arc 140V GPU",
+  "files": [
+   "demo/tinyllama-int4.openvino-cpu-decode.afterpass.json.gz",
+   "demo/tinyllama-int4.openvino-gpu-decode.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "Qwen2.5-32B (dense), OpenVINO, AMD EPYC CPU",
+  "files": [
+   "demo/qwen2.5-32b.openvino-cpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "Qwen3-30B-A3B (MoE), OpenVINO, Arc 140V GPU",
+  "files": [
+   "demo/qwen3-30b-a3b.openvino-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "TinyLlama 1.1B, TensorRT, RTX 4050",
+  "files": [
+   "demo/tinyllama-1.1b.tensorrt-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "YOLO11n, TensorRT, RTX 4050",
+  "files": [
+   "demo/yolo11n.tensorrt-gpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "ResNet-50, OpenVINO, Core Ultra 7 258V CPU",
+  "files": [
+   "demo/resnet50.openvino-cpu.afterpass.json.gz"
+  ]
+ },
+ {
+  "title": "BERT base, OpenVINO, Lunar Lake NPU",
+  "files": [
+   "demo/bert-base.openvino-npu.afterpass.json.gz"
+  ]
+ }
 ]
