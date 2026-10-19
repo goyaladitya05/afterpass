@@ -328,17 +328,18 @@ function report(wasmBytes: number) {
 /** "openvino 2026.4.1 GPU Intel(R) Arc(TM) 140V" gives "openvino 2026.4.1 GPU" (the pane heads carry the rest). */
 const short = (label: string) => label.split(" ").slice(0, 3).join(" ");
 
-/** What a bundle says about its capture (`Session.about`); empty for a source pane. */
-type About = { runtime?: string; version?: string; device?: string; device_name?: string; captured?: string; model?: string; phase?: string };
+/** What a bundle says about its capture (`Session.about`), or what imported files said; empty for a source pane. */
+type About = { runtime?: string; version?: string; device?: string; device_name?: string; captured?: string; model?: string; phase?: string; imported?: string };
 const RUNTIMES: Record<string, string> = { openvino: "OpenVINO", tensorrt: "TensorRT", onnxruntime: "ONNX Runtime" };
 /** "Intel(R) Arc(TM) 140V GPU (16GB)" gives "Intel Arc 140V GPU (16GB)". */
 const tidy = (name: string) => name.replace(/\((R|TM)\)/g, "").replace(/\s+/g, " ").trim();
 
-/** A compiled pane's title and first words of its header: who compiled it, for which device, and when. */
+/** A compiled pane's title and first words of its header: who compiled it, for which device, and when. Imported
+ * files may not say the version or the device. */
 function compiledBy(a: About): [string, string] {
-  const device = a.device_name ? `on ${tidy(a.device_name)} (${a.device})` : `on ${a.device}`;
-  const when = `${a.captured ? `, captured ${a.captured}` : ""}${a.phase ? `, ${a.phase}` : ""}`;
-  return [`compiled by ${RUNTIMES[a.runtime ?? ""] ?? a.runtime} ${a.version}`, `${device}${when}`];
+  const device = a.device_name ? `on ${tidy(a.device_name)} (${a.device})` : a.device ? `on ${a.device}` : "device not recorded";
+  const when = `${a.captured ? `, captured ${a.captured}` : ""}${a.phase ? `, ${a.phase}` : ""}${a.imported ? `, imported from ${a.imported}` : ""}`;
+  return [`compiled by ${RUNTIMES[a.runtime ?? ""] ?? a.runtime}${a.version ? ` ${a.version}` : ""}`, `${device}${when}`];
 }
 
 const INSTALL = `uv tool install "git+https://github.com/goyaladitya05/afterpass#subdirectory=capture"`;

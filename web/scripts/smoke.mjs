@@ -13,7 +13,9 @@ const browser = await chromium.launch({
 const page = await browser.newPage({ viewport: { width: 1400, height: 800 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(`page error: ${e.message}`));
-page.on("console", (m) => m.type() === "error" && errors.push(`console: ${m.text()}`));
+// a refused load is logged as an error too; `refusing` names the one expected
+let refusing = null;
+page.on("console", (m) => m.type() === "error" && !(refusing && m.text().includes(refusing)) && errors.push(`console: ${m.text()}`));
 await page.goto(url);
 await page.waitForSelector("#demos button");
 const demos = await page.locator("#demos button").count();
@@ -27,6 +29,20 @@ for (let i = 0; i < demos; i++) {
   console.log(`ok  ${await page.evaluate(() => document.querySelector("#crumbs").textContent)}`);
   await page.click("#home");
 }
+
+// benchmark_app output: the toy model with its execution graph and report, then the execution graph alone
+const fixtures = new URL("../../core/tests/fixtures/", import.meta.url).pathname;
+await page.setInputFiles("#file", ["toy.onnx", "toy.exec.xml", "toy.benchmark_report.csv"].map((f) => fixtures + f));
+await page.waitForFunction(() => document.querySelector("#loading").hidden && document.querySelector("#findings-body li"), null, { timeout: 60000 });
+const head = await page.evaluate(() => document.querySelector('[data-pane="1"] .pane-head').textContent);
+if (!head.includes("compiled by OpenVINO") || !head.includes("imported from benchmark_app")) errors.push(`import: pane header ${head}`);
+console.log(`ok  import: ${head}`);
+refusing = "toy.exec.xml is an OpenVINO execution graph";
+await page.setInputFiles("#file", [fixtures + "toy.exec.xml"]);
+await page.waitForFunction(() => !document.querySelector("#load-error").hidden, null, { timeout: 60000 });
+const refused = await page.evaluate(() => document.querySelector("#load-error").textContent);
+if (!refused.includes("open it together with the model")) errors.push(`import: exec.xml alone gave ${refused}`);
+console.log(`ok  refused: ${refused}`);
 await browser.close();
 if (errors.length || !demos) {
   console.error(errors.join("\n") || "no demos found");
