@@ -67,10 +67,10 @@ pub fn parse(json: &[u8]) -> Result<Model, String> {
     let mut compiled = graph(&b["compiled"]);
     if let Some(times) = b["profile"]["nodes"].as_object() {
         for (id, t) in times {
-            if let (Ok(i), Some(t)) = (id.parse::<usize>(), t.as_f64()) {
-                if let Some(n) = compiled.nodes.get_mut(i) {
-                    n.time_us = Some(t as f32);
-                }
+            if let (Ok(i), Some(t)) = (id.parse::<usize>(), t.as_f64())
+                && let Some(n) = compiled.nodes.get_mut(i)
+            {
+                n.time_us = Some(t as f32);
             }
         }
     }

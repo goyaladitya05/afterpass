@@ -1,12 +1,12 @@
 //! Structure and timing on the real corpus (skipped when corpus/ is absent).
 //! cargo test --release --test corpus -- --nocapture
 
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::time::Instant;
 
-use std::collections::{HashMap, HashSet};
-
-use afterpass_core::ir::{Grade, Model};
+use afterpass_core::analysis::data_path;
+use afterpass_core::ir::{Grade, Model, Via};
 use afterpass_core::{bundle, onnx, ovir, Session};
 
 fn corpus(rel: &str) -> Option<std::path::PathBuf> {
@@ -86,35 +86,29 @@ fn onnx_files() {
     }
 }
 
+/// Load time, collapsing, provenance coverage and findings per bundle.
 #[test]
 fn bundles() {
     for (name, json) in bundles_in(&["bundles", "bundles-lnl", "bundles-30b"]) {
         let t0 = Instant::now();
         let s = Session::from_model(bundle::parse(&json).unwrap());
         report(&name, t0, &s);
-        if name.starts_with("bundles-30b") {
-            for x in s.findings_json().iter().filter(|x| x["section"] == "time") {
-                println!("  time: {} | {}", x["title"].as_str().unwrap(), x["detail"].as_str().unwrap());
-            }
-        }
-    }
-}
-
-#[test]
-fn structural_coverage() {
-    for (name, json) in bundles_in(&["bundles", "bundles-lnl", "bundles-30b"]) {
-        let s = Session::from_model(bundle::parse(&json).unwrap());
         let src = s.pane(0);
-        let path: Vec<usize> = (0..src.graph.nodes.len()).filter(|&v| afterpass_core::analysis::data_path(src, v)).collect();
-        let by = |structure: bool| path.iter().filter(|&&v| s.links()[0][0][v].iter().any(|l| structure || l.via != afterpass_core::ir::Via::Structure)).count();
+        let path: Vec<usize> = (0..src.graph.nodes.len()).filter(|&v| data_path(src, v)).collect();
+        let by = |structure: bool| path.iter().filter(|&&v| s.links()[0][0][v].iter().any(|l| structure || l.via != Via::Structure)).count();
         let findings = s.findings_json();
-        let mut sections = std::collections::BTreeMap::new();
+        let mut sections = BTreeMap::new();
         for x in &findings {
             *sections.entry(x["section"].as_str().unwrap().to_string()).or_insert(0) += 1;
         }
-        println!("{name}: source covered {:.1}% by name, {:.1}% with structure; findings {:?}",
+        println!("  source covered {:.1}% by name, {:.1}% with structure; findings {:?}",
             100.0 * by(false) as f64 / path.len() as f64,
             100.0 * by(true) as f64 / path.len() as f64, sections);
+        if name.starts_with("bundles-30b") {
+            for x in findings.iter().filter(|x| x["section"] == "time") {
+                println!("  time: {} | {}", x["title"].as_str().unwrap(), x["detail"].as_str().unwrap());
+            }
+        }
     }
 }
 
@@ -168,7 +162,7 @@ fn structure_accuracy() {
             }
             let s = Session::from_model(m);
             let src = s.pane(0);
-            for (&v, t) in want.iter().filter(|(v, _)| afterpass_core::analysis::data_path(src, **v as usize)) {
+            for (&v, t) in want.iter().filter(|(v, _)| data_path(src, **v as usize)) {
                 let got: Vec<u32> = s.links()[0][0][v as usize].iter().map(|l| l.other).collect();
                 lost += 1;
                 found += got.iter().any(|k| t.contains(k)) as usize;

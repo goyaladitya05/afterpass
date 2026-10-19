@@ -1,14 +1,15 @@
 use std::io::Read;
 
-use afterpass_core::hier::{scope_tokens, Hier};
-use afterpass_core::ir::Grade;
+use afterpass_core::analysis::{data_path, linked_nodes};
+use afterpass_core::hier::{majority_scope, scope_tokens, Hier};
+use afterpass_core::ir::{Graph, Grade, Link, Model, Node, Via};
 use afterpass_core::{bundle, onnx, ovir, Session};
 
 fn fixture(name: &str) -> Vec<u8> {
     std::fs::read(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
-fn toy_onnx() -> afterpass_core::ir::Graph {
+fn toy_onnx() -> Graph {
     onnx::parse(&mut &fixture("toy.onnx")[..]).unwrap()
 }
 
@@ -24,8 +25,7 @@ fn gunzip(b: &[u8]) -> Vec<u8> {
 
 #[test]
 fn onnx_topology_without_weights() {
-    let bytes = fixture("toy.onnx");
-    let g = onnx::parse(&mut &bytes[..]).unwrap();
+    let g = toy_onnx();
     assert_eq!(g.nodes.len(), 15);
     assert_eq!(g.nodes[1].name, "/model/layers.0/fc/MatMul");
     let w = g.tensors.iter().find(|t| t.name == "layers.0.w").unwrap();
@@ -57,6 +57,18 @@ fn bundles() {
         assert!(c.nodes.iter().any(|n| n.time_us.is_some()), "{f}: no times");
         assert!(m.links.iter().any(|l| l.grade == Grade::Explicit), "{f}: no explicit links");
         assert!(m.latency_us.unwrap() > 0.0);
+        // opens as source and compiled panes, both drawn, with findings that point into them
+        let s = Session::from_model(m);
+        assert_eq!(s.panes(), 2);
+        for pane in 0..2 {
+            let sc = &s.pane(pane).scene;
+            assert!(!sc.kinds.is_empty());
+            assert_eq!(sc.boxes.len(), sc.kinds.len() * 4);
+            assert!(sc.width > 0.0 && sc.height > 0.0);
+        }
+        let f = s.findings_json();
+        assert!(f.iter().any(|x| x["section"] == "time"), "no time findings: {f:?}");
+        assert!(f.iter().flat_map(|x| x["targets"].as_array().unwrap()).all(|t| t[0].as_u64().unwrap() < 2));
     }
 }
 
@@ -85,21 +97,7 @@ fn stacks_and_outliers() {
 }
 
 #[test]
-fn session_links_both_ways() {
-    let m = bundle::parse(&gunzip(&fixture("toy.tensorrt-gpu.afterpass.json.gz"))).unwrap();
-    let s = Session::from_model(m);
-    assert_eq!(s.panes(), 2);
-    for pane in 0..2 {
-        let sc = &s.pane(pane).scene;
-        assert!(!sc.kinds.is_empty());
-        assert_eq!(sc.boxes.len(), sc.kinds.len() * 4);
-        assert!(sc.width > 0.0 && sc.height > 0.0);
-    }
-}
-
-#[test]
 fn fused_kernels_land_in_their_majority_scope() {
-    use afterpass_core::hier::majority_scope;
     let scopes = |v: &[&str]| v.iter().map(|s| scope_tokens(s)).collect::<Vec<_>>();
     let cross = scopes(&["/m/layers.5/Add", "/m/layers.6/norm/Mul", "/m/layers.6/norm/Pow", "/m/layers.6/norm/Sqrt"]);
     assert_eq!(majority_scope(cross), ["m", "layers", "6", "norm"]);
@@ -110,26 +108,7 @@ fn fused_kernels_land_in_their_majority_scope() {
 }
 
 #[test]
-fn stepping_a_stack_keeps_inner_expansion() {
-    use afterpass_core::ir::Model;
-    let g = toy_onnx();
-    let mut s = Session::from_model(Model { source: g, ..Default::default() });
-    let titles = |s: &Session| s.pane(0).scene.titles.clone();
-    let stack = titles(&s).iter().position(|t| t.starts_with("layers.0..1")).unwrap() as u32;
-    let b = s.toggle(0, stack);
-    assert!(b >= 0);
-    let fc = titles(&s).iter().position(|t| t == "fc").unwrap() as u32;
-    assert!(s.toggle(0, fc) >= 0);
-    let frame = titles(&s).iter().position(|t| t.starts_with("layers.0..1")).unwrap() as u32;
-    assert!(s.step(0, frame, 1) >= 0);
-    let t = titles(&s);
-    assert!(t.iter().any(|t| t.contains("unit 2/2")));
-    assert!(t.iter().any(|t| t == "MatMul"), "fc group of the next unit should stay expanded: {t:?}");
-}
-
-#[test]
 fn structure_recovers_ops_whose_names_were_lost() {
-    use afterpass_core::ir::{Graph, Link, Model, Node, Via};
     // source a -> b -> c, compiled kernel k claims a and c (b's name was dropped by a pattern fusion)
     let mut src = Graph::default();
     let (x, ta, tb, tc) = (src.tensor("x"), src.tensor("ta"), src.tensor("tb"), src.tensor("tc"));
@@ -154,7 +133,6 @@ fn structure_recovers_ops_whose_names_were_lost() {
 
 #[test]
 fn reveal_opens_a_collapsed_stack() {
-    use afterpass_core::ir::Model;
     let g = toy_onnx();
     let v = g.nodes.iter().position(|n| n.name == "/model/layers.1/fc/Add").unwrap() as u32;
     let mut s = Session::from_model(Model { source: g, ..Default::default() });
@@ -166,26 +144,14 @@ fn reveal_opens_a_collapsed_stack() {
 }
 
 #[test]
-fn findings_cover_time_and_provenance() {
-    let s = toy_session("toy.tensorrt-gpu.afterpass.json.gz");
-    let f = s.findings_json();
-    assert!(f.iter().any(|x| x["section"] == "time"));
-    for x in &f {
-        for t in x["targets"].as_array().unwrap() {
-            assert!(t[0].as_u64().unwrap() < 2);
-        }
-    }
-}
-
-#[test]
 fn two_runtimes_compare_through_the_source() {
     let mut s = toy_session("toy.openvino-cpu.afterpass.json.gz");
     s.add_compiled(toy_session("toy.tensorrt-gpu.afterpass.json.gz")).unwrap();
     assert_eq!(s.links().len(), 2);
     // every linked kernel of A reaches kernels of B through the source ops they share
     let a = s.pane(1);
-    let k = (0..a.graph.nodes.len() as u32).find(|&k| !s.links()[0][1][k as usize].is_empty() && afterpass_core::analysis::data_path(a, k as usize)).unwrap();
-    assert!(!afterpass_core::analysis::linked_nodes(s.links(), 1, &[k], 2).is_empty());
+    let k = (0..a.graph.nodes.len() as u32).find(|&k| !s.links()[0][1][k as usize].is_empty() && data_path(a, k as usize)).unwrap();
+    assert!(!linked_nodes(s.links(), 1, &[k], 2).is_empty());
     let f = s.findings_json();
     let sections: Vec<&str> = f.iter().map(|x| x["section"].as_str().unwrap()).collect();
     assert_eq!(sections[0], "summary");
@@ -193,7 +159,7 @@ fn two_runtimes_compare_through_the_source() {
     assert!(f.iter().any(|x| x["title"].as_str().unwrap().starts_with("B  ")));
     // a capture of another source is refused
     let mut other = toy_session("toy.openvino-cpu.afterpass.json.gz");
-    let onnx_only = Session::from_model(afterpass_core::ir::Model { source: toy_onnx(), ..Default::default() });
+    let onnx_only = Session::from_model(Model { source: toy_onnx(), ..Default::default() });
     assert!(other.add_compiled(onnx_only).is_err());
 }
 
@@ -205,8 +171,8 @@ fn bad_inputs_are_errors_not_panics() {
     let json = gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"));
     let open = |kind: &str, b: &[u8]| -> Result<Session, String> {
         let s = match kind {
-            "onnx" => Session::from_model(afterpass_core::ir::Model { source: onnx::parse(&mut &b[..])?, ..Default::default() }),
-            "xml" => Session::from_model(afterpass_core::ir::Model { source: ovir::parse(b)?, ..Default::default() }),
+            "onnx" => Session::from_model(Model { source: onnx::parse(&mut &b[..])?, ..Default::default() }),
+            "xml" => Session::from_model(Model { source: ovir::parse(b)?, ..Default::default() }),
             _ => Session::from_model(bundle::parse(b)?),
         };
         let _ = s.findings_json();
@@ -285,9 +251,8 @@ fn oversized_nodes_keep_their_edges() {
 /// Stepping to a unit shown before uses its new expansion, not the cached layout from last time.
 #[test]
 fn stepping_to_a_visited_unit_shows_the_carried_expansion() {
-    use afterpass_core::ir::Model;
     let mut s = Session::from_model(Model { source: toy_onnx(), ..Default::default() });
-    let find = |s: &Session, f: &dyn Fn(&String) -> bool| s.pane(0).scene.titles.iter().position(|t| f(t)).unwrap() as u32;
+    let find = |s: &Session, f: &dyn Fn(&String) -> bool| s.pane(0).scene.titles.iter().position(f).unwrap() as u32;
     let stack = |t: &String| t.starts_with("layers.0..1");
     s.toggle(0, find(&s, &stack));
     s.step(0, find(&s, &stack), 1); // visit unit 2, so its layout is cached

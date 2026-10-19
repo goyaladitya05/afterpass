@@ -1,7 +1,7 @@
 // Signed distance field glyph atlas for a monospace font, generated at startup with a 2D canvas.
 // Distance transform: Felzenszwalb and Huttenlocher, the same approach as Mapbox TinySDF.
 
-export const CHARS = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)).join("") + "×…";
+const CHARS = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i)).join("") + "×…";
 
 export interface Atlas {
   data: Uint8Array;

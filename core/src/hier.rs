@@ -225,7 +225,7 @@ impl Hier {
         let mut hier = Hier { groups, stacks: Vec::new(), node_group, folded };
         hier.compress();
         hier.measure();
-        hier.hash(g, &preds, &succs, compiled);
+        hier.hash(g, preds, succs, compiled);
         hier.find_stacks();
         hier
     }
