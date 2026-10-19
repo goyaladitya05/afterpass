@@ -1,4 +1,4 @@
-//! Bundle format v0 reader (spec: docs/notes/bundle-format.md). Input is the decompressed JSON.
+//! Bundle format v0 reader (the writer is capture/src/afterpass/bundle.py). Input is the decompressed JSON.
 
 use serde_json::Value;
 

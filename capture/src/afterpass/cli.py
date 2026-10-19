@@ -45,7 +45,10 @@ def capture(args) -> None:
         "shapes": shapes,
         "compile_s": result.pop("compile_s"),
         "capture_s": time.perf_counter() - t0,
-        "command": " ".join(sys.argv[1:]),
+        # file names only: a bundle is shared, local paths are not
+        "command": f"capture {model.name} --runtime {args.runtime} --device {args.device}"
+        + "".join(f" --shape {n}={','.join(map(str, d))}" for n, d in args.shape)
+        + f" --iterations {args.iterations} --warmup {args.warmup}",
     }
     out = Path(args.output or f"{model.stem}.{args.runtime}-{args.device.lower()}.afterpass.json.gz")
     bundle.write(out, bundle.build(src, result, meta))

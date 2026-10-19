@@ -49,6 +49,7 @@ def check_invariants(b):
         assert (l["source"] is None) == (l["grade"] == "unknown")
     assert set(b["profile"]["nodes"]) <= {str(i) for i in compiled_ids}
     assert b["profile"]["latency"]["median"] > 0
+    assert b["capture"]["command"] == f"capture tiny.onnx --runtime {b['capture']['runtime']} --device {b['capture']['device']} --iterations 3 --warmup 1"
 
 
 def explicit_sources(b):
