@@ -1,6 +1,6 @@
 use std::io::Read;
 
-use afterpass_core::analysis::{data_path, linked_nodes};
+use afterpass_core::analysis::{categories, data_path, linked_nodes, Overlay};
 use afterpass_core::hier::{majority_scope, scope_tokens, Hier};
 use afterpass_core::ir::{Graph, Grade, Link, Model, Node, Via, NONE};
 use afterpass_core::onnx::ByteSource;
@@ -390,6 +390,26 @@ fn reveal_opens_a_collapsed_stack() {
     let p = s.pane(0);
     assert_eq!(p.box_nodes(b as u32), [v]);
     assert!(p.scene.titles.iter().any(|t| t.contains("unit 2/2")), "{:?}", p.scene.titles);
+}
+
+/// An ONNX Runtime GPU capture records each node's provider; the Device overlay shows the nodes left to the CPU.
+#[test]
+fn device_overlay_shows_provider_fallback() {
+    let mut v: serde_json::Value = serde_json::from_slice(&gunzip(&fixture("toy.openvino-cpu.afterpass.json.gz"))).unwrap();
+    (v["compiled"]["runtime"], v["compiled"]["device"]) = ("onnxruntime".into(), "CUDA".into());
+    let device = |v: &serde_json::Value| {
+        let mut s = Session::from_model(bundle::parse(&serde_json::to_vec(v).unwrap()).unwrap());
+        let b = s.reveal(1, 4, false) as usize;
+        let (cats, legend) = categories(s.pane(1), Overlay::Device, "onnxruntime", "CUDA");
+        (legend[cats[b] as usize].clone(), legend)
+    };
+    // without providers every compiled node is on the bundle's device
+    assert_eq!(device(&v), ("CUDA".to_string(), vec!["CUDA".to_string()]));
+    for n in v["compiled"]["nodes"].as_array_mut().unwrap() {
+        let p = if n["id"] == 4 { "CPUExecutionProvider" } else { "CUDAExecutionProvider" };
+        n["attrs"]["provider"] = p.into();
+    }
+    assert_eq!(device(&v), ("CPU".to_string(), vec!["CUDA".to_string(), "CPU".to_string()]));
 }
 
 #[test]

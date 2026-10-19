@@ -461,7 +461,15 @@ pub fn categories(p: &Pane, mode: Overlay, runtime: &str, device: &str) -> (Vec<
             Overlay::Precision => node_precision(g, n).unwrap_or("").to_string(),
             Overlay::Layout => layout_name(g, n),
             Overlay::Device => {
-                if matches!(n.kernel.as_str(), "DPU" | "Shave") { n.kernel.clone() } else if p.compiled { device.to_string() } else { String::new() }
+                // an ONNX Runtime node records its provider: CPU fallbacks inside a CUDA or TensorRT session show
+                let provider = n.attrs.iter().find(|(k, _)| k == "provider").map(|(_, v)| v.trim_end_matches("ExecutionProvider"));
+                if matches!(n.kernel.as_str(), "DPU" | "Shave") {
+                    n.kernel.clone()
+                } else if !p.compiled {
+                    String::new()
+                } else {
+                    provider.filter(|v| !v.eq_ignore_ascii_case(device)).unwrap_or(device).to_string()
+                }
             }
             Overlay::Kernel => if p.compiled { kernel_family(runtime, n) } else { String::new() },
         }
