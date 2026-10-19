@@ -15,9 +15,10 @@ from afterpass import bundle
 def tiny(tmp_path_factory):
     """Conv + BN + Relu + residual Add + Reshape + MatMul, exercising fusion, reorders and graph-output naming."""
     r = np.random.default_rng(0).random
+    # 16 channels: a multiple of every NCHWc block size ONNX Runtime uses on x86 (8 with AVX2, 16 with AVX-512)
     inits = [nh.from_array(r(s).astype("float32"), n) for n, s in
-             [("w", (8, 3, 3, 3)), ("b", (8,)), ("s", (8,)), ("bb", (8,)), ("m", (8,)), ("fcw", (2048, 10))]]
-    inits += [nh.from_array(r(8).astype("float32") + 1, "v"), nh.from_array(np.array([1, -1], "int64"), "shp")]
+             [("w", (16, 3, 3, 3)), ("b", (16,)), ("s", (16,)), ("bb", (16,)), ("m", (16,)), ("fcw", (4096, 10))]]
+    inits += [nh.from_array(r(16).astype("float32") + 1, "v"), nh.from_array(np.array([1, -1], "int64"), "shp")]
     nodes = [h.make_node("Conv", ["x", "w", "b"], ["c"], name="conv1", pads=[1, 1, 1, 1]),
              h.make_node("BatchNormalization", ["c", "s", "bb", "m", "v"], ["bn"], name="bn1"),
              h.make_node("Relu", ["bn"], ["r"], name="relu1"),
@@ -27,7 +28,8 @@ def tiny(tmp_path_factory):
     g = h.make_graph(nodes, "tiny", [h.make_tensor_value_info("x", T.FLOAT, [1, 3, 16, 16])],
                      [h.make_tensor_value_info("y", T.FLOAT, [1, 10])], inits)
     d = tmp_path_factory.mktemp("tiny")
-    onnx.save(h.make_model(g, opset_imports=[h.make_opsetid("", 17)]), d / "tiny.onnx")
+    # IR 10: ONNX Runtime 1.31 refuses the IR 14 that onnx 1.23 writes by default
+    onnx.save(h.make_model(g, opset_imports=[h.make_opsetid("", 17)], ir_version=10), d / "tiny.onnx")
     return d
 
 
@@ -64,6 +66,41 @@ def test_openvino_cpu(tiny):
     assert reorders and all(l["grade"] == "unknown" for l in b["provenance"] if l["compiled"] in reorders)
     # the MatMul is renamed after its graph output tensor, so its link can only be inferred
     assert any(l["source"] == 5 and l["grade"] == "inferred" and l["via"] == "tensor" for l in b["provenance"])
+
+
+def test_onnxruntime_cpu(tiny):
+    b = run_capture(tiny, "onnxruntime", "CPU")
+    check_invariants(b)
+    nodes = b["compiled"]["nodes"]
+    # every node is timed, carries its provider, and has the shape the run produced
+    assert set(b["profile"]["nodes"]) == {str(n["id"]) for n in nodes} and not b["profile"]["unmatched"]
+    assert all(n["attrs"]["provider"] == "CPUExecutionProvider" and n["kernel"].startswith("CPU ") for n in nodes)
+    assert all(b["compiled"]["tensors"][t]["shape"] for n in nodes for t in n["outputs"])
+    nchwc = [n for n in nodes if n["attrs"].get("domain") == "com.microsoft.nchwc"]
+    if not nchwc:  # no NCHWc kernels on this CPU (not x86): nothing is fused
+        assert explicit_sources(b) == {"conv1", "bn1", "relu1", "add1", "flat", "fc"}
+        return
+    assert explicit_sources(b) == {"add1", "flat", "fc"}
+    # the NCHWc Conv is named after the source Conv's output tensor ("c_nchwc"), so its link is inferred
+    assert any(l["source"] == 0 and l["grade"] == "inferred" and l["via"] == "tensor" for l in b["provenance"])
+    reorders = [n["id"] for n in nchwc if n["op"] == "ReorderOutput"]
+    assert reorders and all(l["grade"] == "unknown" for l in b["provenance"] if l["compiled"] in reorders)
+    assert all(b["compiled"]["tensors"][n["outputs"][0]].get("layout") == "NCHWc" for n in nchwc if n["op"] == "Conv")
+
+
+def test_onnxruntime_profile_events():
+    from afterpass import ort
+    g = h.make_graph([h.make_node("Relu", ["x"], ["a"], name="r"), h.make_node("Exp", ["a"], ["b"]),
+                      h.make_node("Neg", ["b"], ["y"])], "g", [], [])
+
+    def run(ts):  # as traced: the profiler names an unnamed node "<op type>_<internal index>"
+        ev = [("r", "Relu"), ("Exp_7", "Exp"), ("Neg_9", "Neg")]
+        return [{"cat": "Session", "name": "model_run", "ts": ts, "dur": 10}] + [
+            {"cat": "Node", "name": f"{n}_kernel_time", "ts": ts + k + 1, "dur": 1, "args": {"op_name": op}} for k, (n, op) in enumerate(ev)]
+
+    runs = ort._runs(run(200) + run(0) + run(100), warmup=1)
+    assert [[e["ts"] for e in r] for r in runs] == [[101, 102, 103], [201, 202, 203]]
+    assert ort._event_ids(g, runs[0]) == {"r": 0, "Exp_7": 1, "Neg_9": 2}
 
 
 def test_tensorrt(tiny):
