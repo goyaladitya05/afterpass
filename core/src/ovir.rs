@@ -41,6 +41,7 @@ pub fn parse(xml: &[u8]) -> Result<Graph, String> {
     let mut port: Option<(bool, Port)> = None;
     let mut in_dim = false;
     let mut nested = 0usize;
+    let mut meta: Vec<(String, String)> = Vec::new();
 
     loop {
         let ev = r.read_event_into(&mut buf).map_err(|e| format!("IR XML error at {}: {e}", r.buffer_position()))?;
@@ -52,6 +53,14 @@ pub fn parse(xml: &[u8]) -> Result<Graph, String> {
                 let depth = path.len();
                 let in_body = path.iter().any(|p| p == "body");
                 match (depth, name.as_str()) {
+                    (0, "net") => meta.push(("format".into(), format!("OpenVINO IR v{}", attr(e, "version").unwrap_or_default()))),
+                    // rt_info: who converted and compressed the model, e.g. nncf.weight_compression.mode = int4_asym
+                    _ if path.get(1).is_some_and(|p| p == "rt_info") => {
+                        if let Some(v) = attr(e, "value") {
+                            let key = path[2..].iter().chain([&name]).map(String::as_str).collect::<Vec<_>>().join(".");
+                            meta.push((key, if v.len() > 200 { format!("{}...", &v[..v.floor_char_boundary(200)]) } else { v }));
+                        }
+                    }
                     _ if in_body => {
                         if name == "layer" {
                             nested += 1;
@@ -136,6 +145,7 @@ pub fn parse(xml: &[u8]) -> Result<Graph, String> {
     }
 
     let mut g = Graph::default();
+    g.meta = meta;
     let by_xml: HashMap<u32, usize> = layers.iter().enumerate().map(|(i, l)| (l.xml_id, i)).collect();
     let mut out_tensor: HashMap<(u32, u32), u32> = HashMap::new();
     for l in &layers {

@@ -222,6 +222,22 @@ fn two_runtimes_compare_through_the_source() {
     assert!(other.add_compiled(onnx_only).is_err());
 }
 
+/// A model opened on its own is summarised: format, weights counted from shapes, inputs, outputs, ops.
+#[test]
+fn plain_models_are_summarised() {
+    for g in [toy_onnx(), ovir::parse(&fixture("toy.xml")).unwrap()] {
+        let format = g.meta[0].1.clone();
+        let s = Session::from_model(Model { source: g, ..Default::default() });
+        let f = s.findings_json();
+        let titles = |section: &str| f.iter().filter(|x| x["section"] == section).map(|x| x["title"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        assert!(format.starts_with("ONNX") || format.starts_with("OpenVINO IR"), "{format}");
+        assert!(titles("model").iter().any(|t| t.contains(" weights, ")), "{f:?}");
+        let io = titles("io");
+        assert!(io.iter().any(|t| t.starts_with("in ")) && io.iter().any(|t| t.starts_with("out ")), "{io:?}");
+        assert!(titles("ops").iter().any(|t| t.starts_with("MatMul x")), "{f:?}");
+    }
+}
+
 /// Damaged or foreign files must come back as errors: a panic would abort the wasm worker.
 #[test]
 fn bad_inputs_are_errors_not_panics() {

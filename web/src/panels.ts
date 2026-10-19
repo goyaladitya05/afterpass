@@ -38,6 +38,8 @@ export const us = (t: number | null | undefined) =>
   t == null ? "" : t >= 1000 ? `${(t / 1000).toFixed(2)} ms` : `${t.toFixed(t < 10 ? 1 : 0)} us`;
 
 const SECTIONS: [string, string][] = [
+  ["model", "model"],
+  ["io", "inputs and outputs"],
   ["summary", "A vs B"],
   ["delta", "where the time differs"],
   ["fusion", "fused differently"],
@@ -48,6 +50,7 @@ const SECTIONS: [string, string][] = [
   ["inserted", "kernels without a source op"],
   ["precision", "precision fallbacks"],
   ["outliers", "outlier blocks"],
+  ["ops", "ops"],
 ];
 
 /** Render Findings; `pick(item, k)` is called with the k-th target when an item is clicked repeatedly. */

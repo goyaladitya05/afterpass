@@ -480,8 +480,112 @@ fn counted<'a>(names: impl Iterator<Item = &'a str>, limit: usize) -> String {
 /// The Findings list. For each compiled graph: top time sinks and unattributed time, unaccounted source ops,
 /// kernels the runtime inserted, precision fallbacks. With two compiled graphs, the comparison comes first.
 /// Then outlier blocks of every pane. Each item names the nodes it jumps to.
+/// Bits per element of an ONNX or OpenVINO element type; None when unknown.
+fn dtype_bits(dtype: &str) -> Option<u64> {
+    Some(match dtype.to_ascii_lowercase().as_str() {
+        "double" | "f64" | "int64" | "i64" | "uint64" | "u64" => 64,
+        "float" | "f32" | "int32" | "i32" | "uint32" | "u32" => 32,
+        "float16" | "f16" | "bfloat16" | "bf16" | "int16" | "i16" | "uint16" | "u16" => 16,
+        "int8" | "i8" | "uint8" | "u8" | "bool" | "boolean" | "float8e4m3fn" | "float8e5m2" | "f8e4m3" | "f8e5m2" => 8,
+        "int4" | "i4" | "uint4" | "u4" | "nf4" | "float4e2m1" => 4,
+        _ => return None,
+    })
+}
+
+/// 1234567 gives "1.23 M".
+fn fmt_count(n: u64) -> String {
+    match n {
+        1_000_000_000.. => format!("{:.2} B", n as f64 / 1e9),
+        1_000_000.. => format!("{:.2} M", n as f64 / 1e6),
+        1_000.. => format!("{:.1} K", n as f64 / 1e3),
+        _ => n.to_string(),
+    }
+}
+
+fn fmt_bytes(b: f64) -> String {
+    if b >= (1u64 << 30) as f64 { format!("{:.2} GiB", b / (1u64 << 30) as f64) } else { format!("{:.1} MiB", b / (1u64 << 20) as f64) }
+}
+
+/// A model opened on its own: what it is, its inputs and outputs, its weights (counted from their shapes, never
+/// read) and its ops.
+fn model_summary(p: &Pane) -> Vec<Value> {
+    let g = &p.graph;
+    let short = |v: &str| if v.chars().count() > 80 { format!("{}...", v.chars().take(80).collect::<String>()) } else { v.to_string() };
+    // a nested entry (nncf.weight_compression.mode) reads "mode: int4_asym" over its path
+    let mut out: Vec<Value> = g.meta.iter().take(16).map(|(k, v)| match k.rsplit_once('.') {
+        Some((path, last)) => item("model", "info", format!("{last}: {}", short(v)), path.to_string(), vec![]),
+        None => item("model", "info", short(v), k.clone(), vec![]),
+    }).collect();
+    // weights: ONNX initializers, OpenVINO Const outputs
+    let mut by_dtype: Vec<(String, u64, f64)> = Vec::new();
+    for t in &g.tensors {
+        let from_const = t.producer != NONE && g.nodes[t.producer as usize].op == "Const";
+        let Some(shape) = t.shape.as_ref().filter(|_| t.constant || from_const) else { continue };
+        if shape.iter().any(|&d| d < 0) {
+            continue;
+        }
+        let n: u64 = shape.iter().map(|&d| d as u64).product();
+        let bytes = dtype_bits(&t.dtype).map_or(0.0, |b| (n * b) as f64 / 8.0);
+        match by_dtype.iter_mut().find(|(d, _, _)| *d == t.dtype) {
+            Some(e) => (e.1, e.2) = (e.1 + n, e.2 + bytes),
+            None => by_dtype.push((t.dtype.clone(), n, bytes)),
+        }
+    }
+    by_dtype.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
+    let total: u64 = by_dtype.iter().map(|d| d.1).sum();
+    if total > 0 {
+        let parts: Vec<String> = by_dtype.iter().map(|(d, n, b)| format!("{d} {} ({})", fmt_count(*n), fmt_bytes(*b))).collect();
+        // right after the format line: the size matters more than converter settings
+        out.insert(out.len().min(1), item("model", "info", format!("{} weights, {}", fmt_count(total), fmt_bytes(by_dtype.iter().map(|d| d.2).sum())),
+            format!("counted from their shapes: {}", parts.join(", ")), vec![]));
+    }
+    // inputs: data tensors nobody produced, or a Parameter produced; outputs: what Result nodes read (OpenVINO), or
+    // tensors nothing reads (ONNX, which has no output nodes; in an IR they are state writes)
+    let mut read = vec![false; g.tensors.len()];
+    for n in &g.nodes {
+        for &t in n.inputs.iter().filter(|&&t| t != NONE) {
+            read[t as usize] = true;
+        }
+    }
+    let io = |op: &str| IO.contains(&op);
+    let has_results = g.nodes.iter().any(|n| n.op == "Result" || n.op == "Output");
+    let desc = |t: &crate::ir::Tensor| format!("{} {}", t.dtype, t.shape.as_ref().map_or("?".into(), |s| format!("{s:?}").replace("-1", "?")));
+    for (i, t) in g.tensors.iter().enumerate() {
+        let made_by = (t.producer != NONE).then(|| &g.nodes[t.producer as usize]);
+        if !t.constant && read[i] && made_by.is_none_or(|n| n.op == "Parameter" || n.op == "Input") {
+            let first = g.nodes.iter().position(|n| n.inputs.contains(&(i as u32))).unwrap_or(0) as u32;
+            out.push(item("io", "info", format!("in  {}", t.name), desc(t), vec![node_target(0, made_by.map_or(first, |_| t.producer))]));
+        }
+    }
+    for (i, t) in g.tensors.iter().enumerate() {
+        let Some(n) = (t.producer != NONE).then(|| &g.nodes[t.producer as usize]) else { continue };
+        let to_result = g.nodes.iter().any(|r| io(&r.op) && r.inputs.contains(&(i as u32)));
+        if !io(&n.op) && (to_result || (!has_results && !read[i])) && n.op != "Const" {
+            out.push(item("io", "info", format!("out {}", t.name), desc(t), vec![node_target(0, t.producer)]));
+        }
+    }
+    // ops on the data path, most frequent first; clicking one steps through its instances
+    let mut ops: Vec<(&str, Vec<u32>)> = Vec::new();
+    for v in (0..g.nodes.len()).filter(|&v| data_path(p, v)) {
+        match ops.iter_mut().find(|(op, _)| *op == g.nodes[v].op) {
+            Some(e) => e.1.push(v as u32),
+            None => ops.push((&g.nodes[v].op, vec![v as u32])),
+        }
+    }
+    let n_ops: usize = ops.iter().map(|o| o.1.len()).sum();
+    ops.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(b.0)));
+    for (op, vs) in &ops {
+        out.push(item("ops", "info", format!("{op} x{}", vs.len()), format!("{:.1}% of {n_ops} ops", 100.0 * vs.len() as f64 / n_ops as f64),
+            targets(0, &vs[..vs.len().min(500)])));
+    }
+    out
+}
+
 pub fn findings(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
     let mut out = Vec::new();
+    if panes.len() == 1 {
+        out.extend(model_summary(&panes[0]));
+    }
     if panes.len() == 3 {
         out.extend(compare(panes, links, sides));
     }

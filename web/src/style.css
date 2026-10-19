@@ -91,7 +91,8 @@ select, input[type="search"] {
   grid-template-areas: "panes findings" "inspector findings";
 }
 .panes { grid-area: panes; position: relative; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
-.panes:not(.triple) .pane[data-pane="2"] { display: none; }
+.panes.single { grid-template-columns: 1fr; }
+.panes:not(.triple) .pane[data-pane="2"], .panes.single .pane[data-pane="1"] { display: none; }
 /* comparing: A | source | B */
 .panes.triple { grid-template-columns: 1fr 1fr 1fr; }
 .panes.triple .pane[data-pane="1"] { order: -1; }
@@ -119,17 +120,17 @@ select, input[type="search"] {
 .legend i { width: 0.7rem; height: 0.7rem; display: inline-block; border: 1px solid var(--rule); }
 .legend .ramp { width: 6rem; height: 0.5rem; }
 
-/* the compiled pane of a lone model file */
+/* a lone model file: one line saying nothing compiled it, opening to the capture commands */
 .uncompiled {
-  position: absolute; inset: 0; z-index: 2; overflow: auto;
-  display: grid; grid-template-columns: minmax(0, 42rem); align-content: start; gap: var(--space-3);
-  padding: var(--space-12) var(--space-6) var(--space-6);
-  background: var(--bg-canvas);
+  position: absolute; top: var(--space-2); right: var(--space-3); z-index: 4;
+  width: min(36rem, calc(100% - 2 * var(--space-3))); max-height: calc(100% - 2 * var(--space-2)); overflow: auto;
+  background: var(--bg-panel); border: var(--border);
 }
 .uncompiled[hidden] { display: none; }
-.uncompiled > * { margin: 0; }
+.uncompiled summary { cursor: pointer; padding: var(--space-2) var(--space-3); font: var(--fs-label) var(--font-mono); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--accent-text); }
+.uncompiled[open] { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); padding-bottom: var(--space-3); box-shadow: 0 8px 24px rgb(0 0 0 / 0.25); }
+.uncompiled > :not(summary) { margin: 0 var(--space-3); }
 .uncompiled p { color: var(--text-muted); line-height: var(--lh-body); }
-.uncompiled p.label { color: var(--accent-text); }
 .command { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: var(--border); background: var(--bg-panel); }
 .command code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
 .copy { flex: none; background: none; border: var(--border); padding: 0 var(--space-2); cursor: pointer; font: var(--fs-label) var(--font-mono); letter-spacing: var(--tracking-chip); text-transform: uppercase; color: var(--text-muted); }

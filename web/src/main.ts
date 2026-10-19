@@ -344,7 +344,7 @@ const INSTALL = `uv tool install "git+https://github.com/goyaladitya05/afterpass
 
 /** The compiled pane of a lone model file: nothing compiled it, and how to get a compiled graph. */
 function showUncompiled(file: string | null) {
-  const el = $<HTMLElement>("#uncompiled");
+  const el = $<HTMLDetailsElement>("#uncompiled");
   el.hidden = !file;
   if (!file) return;
   const command = (text: string) => {
@@ -353,8 +353,9 @@ function showUncompiled(file: string | null) {
     return h("div", { class: "command" }, h("code", {}, text), copy);
   };
   const capture = (runtime: string, device: string) => command(`afterpass capture ${file} --runtime ${runtime} --device ${device}`);
+  el.open = false;
   el.replaceChildren(
-    h("p", { class: "label" }, "not compiled"),
+    h("summary", {}, "not compiled: see what a compiler does to it"),
     h("p", {}, "Nothing has compiled this model. This page only reads files; a compiled graph comes from running the model through a runtime on real hardware, with afterpass capture."),
     h("p", {}, "To see what OpenVINO does to it, on a machine with an Intel CPU, GPU or NPU:"),
     capture("openvino", "CPU"),
@@ -402,6 +403,7 @@ async function load(files: File[]) {
     const labels: string[] = res.labels;
     const abouts: About[] = res.abouts;
     paneNames = paneCount === 3 ? ["source", "A", "B"] : paneCount === 2 ? (labels[1] ? ["source", "compiled"] : ["graph a", "graph b"]) : ["source"];
+    panesEl.classList.toggle("single", paneCount === 1);
     panesEl.classList.toggle("triple", paneCount === 3);
     showUncompiled(paneCount === 1 ? files[0].name : null);
     const names = files.map((f) => f.name).join(" + ");
@@ -421,7 +423,7 @@ async function load(files: File[]) {
         const [by, on] = compiledBy(abouts[p]);
         [title, what] = [paneCount === 3 ? `${paneNames[p]}: ${by}` : by, `${on}, `];
       } else if (p === 0 && model) what = `${model} as exported, not compiled, `;
-      el.querySelector(".title")!.textContent = p === 1 && paneCount === 1 ? "compiled" : title;
+      el.querySelector(".title")!.textContent = title;
       el.querySelector(".meta")!.textContent = res.nodes[p] !== undefined ? `${what}${res.nodes[p]} nodes${lat}` : "";
     });
     overlaySel.value = latencies.some((l) => l === l) ? "time" : "none";

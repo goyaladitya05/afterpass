@@ -35,6 +35,8 @@ pub struct Tensor {
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub tensors: Vec<Tensor>,
+    /// Model-level facts for display, in order: format, producer, opset, metadata entries.
+    pub meta: Vec<(String, String)>,
     index: HashMap<String, u32>,
 }
 

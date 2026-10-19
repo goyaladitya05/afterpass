@@ -409,17 +409,65 @@ pub fn parse<S: ByteSource>(src: &mut S) -> Result<Graph, String> {
     parse_model(src).map_err(|e| format!("not a readable ONNX model ({e})"))
 }
 
+/// ModelProto: the graph (7), and for display the IR version (1), producer (2, 3), opsets (8) and metadata (14).
 fn parse_model<S: ByteSource>(src: &mut S) -> Result<Graph, String> {
     let len = src.len();
     let mut s = Stream { src, buf: Vec::new(), start: 0, pos: 0, len };
+    let (mut g, mut producer, mut opsets, mut ir, mut props) = (None, Vec::new(), Vec::new(), None, Vec::new());
     while s.pos < len {
         let tag = s.varint()?;
-        if tag >> 3 == 7 && tag & 7 == 2 {
-            let n = s.varint()?;
-            let end = s.pos + n;
-            return graph(&mut s, end);
+        let (field, wire) = (tag >> 3, tag & 7);
+        match (field, wire) {
+            (7, 2) => {
+                let n = s.varint()?;
+                let end = s.pos + n;
+                g = Some(graph(&mut s, end)?);
+            }
+            (1, 0) => ir = Some(s.varint()?),
+            (2 | 3 | 8 | 14, 2) => {
+                let n = s.varint()?;
+                if n > 1 << 16 {
+                    s.pos += n;
+                    continue;
+                }
+                let data = s.bytes(n)?;
+                match field {
+                    8 => {
+                        let (mut domain, mut version) = (String::new(), 0);
+                        for (f, v) in fields(&data) {
+                            match (f, v) {
+                                (1, Value::Bytes(b)) => domain = text(b),
+                                (2, Value::Int(i)) => version = i,
+                                _ => {}
+                            }
+                        }
+                        opsets.push(format!("{} {version}", if domain.is_empty() { "ai.onnx" } else { &domain }));
+                    }
+                    14 => {
+                        let (mut k, mut v) = (String::new(), String::new());
+                        for (f, x) in fields(&data) {
+                            match (f, x) {
+                                (1, Value::Bytes(b)) => k = text(b),
+                                (2, Value::Bytes(b)) => v = text(b),
+                                _ => {}
+                            }
+                        }
+                        props.push((k, v));
+                    }
+                    _ => producer.push(text(&data)),
+                }
+            }
+            _ => s.skip(wire)?,
         }
-        s.skip(tag & 7)?;
     }
-    Err("no graph in ONNX file".into())
+    let mut g = g.ok_or("no graph in ONNX file")?;
+    g.meta.push(("format".into(), ir.map_or("ONNX".into(), |v| format!("ONNX, IR version {v}"))));
+    if !producer.is_empty() {
+        g.meta.push(("producer".into(), producer.join(" ")));
+    }
+    if !opsets.is_empty() {
+        g.meta.push(("opset".into(), opsets.join(", ")));
+    }
+    g.meta.extend(props);
+    Ok(g)
 }
