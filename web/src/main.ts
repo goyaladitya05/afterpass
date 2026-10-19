@@ -342,6 +342,10 @@ function compiledBy(a: About): [string, string] {
   return [`compiled by ${RUNTIMES[a.runtime ?? ""] ?? a.runtime}${a.version ? ` ${a.version}` : ""}`, `${device}${when}`];
 }
 
+/** benchmark_app (installed with the openvino package) keeps the compiled graph and the latency it measured. */
+const benchmarkApp = (model: string) =>
+  `benchmark_app -m ${model} -d CPU -hint latency -exec_graph_path exec.xml -report_type no_counters -report_folder .`;
+
 const INSTALL = `uv tool install "git+https://github.com/goyaladitya05/afterpass#subdirectory=capture"`;
 
 /** The compiled pane of a lone model file: nothing compiled it, and how to get a compiled graph. */
@@ -375,6 +379,9 @@ function showUncompiled(file: string | null) {
     ]),
     h("p", {}, "Then open the .afterpass.json.gz it writes. Install the capture tool once with:"),
     command(INSTALL),
+    h("p", {}, `Already using OpenVINO's benchmark_app? Without afterpass installed, it can keep the compiled graph it ran and the latency it measured:`),
+    command(benchmarkApp(tflite ?? file)),
+    h("p", {}, `Then open ${tflite ? "that .xml" : "this file"} together with the exec.xml and benchmark_report.csv it writes.`),
   );
 }
 

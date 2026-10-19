@@ -33,7 +33,7 @@
         <ul class="results" id="results" hidden></ul>
       </div>
       <button class="btn" id="open"><span data-label="load">load</span></button>
-      <input type="file" id="file" multiple hidden accept=".onnx,.tflite,.xml,.gz,.json" />
+      <input type="file" id="file" multiple hidden accept=".onnx,.tflite,.xml,.gz,.json,.csv" />
     </header>
 
     <main class="workspace" id="workspace">
@@ -82,7 +82,7 @@
         </div>
         <ol class="steps">
           <li><span class="num">001</span><b>your model</b><span>An ONNX or TFLite model, or an OpenVINO IR. Opened here on its own, it shows the source graph only: this page reads files, it never compiles anything.</span></li>
-          <li><span class="num">002</span><b>capture</b><span>On a machine with the runtime and the hardware, <code>afterpass capture</code> compiles the model with OpenVINO, TensorRT or ONNX Runtime, times every kernel and writes a bundle: <code>afterpass capture model.onnx --runtime openvino --device CPU</code></span></li>
+          <li><span class="num">002</span><b>capture</b><span>On a machine with the runtime and the hardware, <code>afterpass capture</code> compiles the model with OpenVINO, TensorRT or ONNX Runtime, times every kernel and writes a bundle: <code>afterpass capture model.onnx --runtime openvino --device CPU</code>. Already using OpenVINO's benchmark_app? Open the model with the exec.xml and benchmark_report.csv it writes: <code>benchmark_app -m model.onnx -d CPU -hint latency -exec_graph_path exec.xml -report_type no_counters -report_folder .</code></span></li>
           <li><span class="num">003</span><b>open the bundle</b><span>Source and compiled side by side, each kernel traced to its source ops, with time sinks, unfused ops and precision changes listed. Open two bundles of one model to compare runtimes, devices or versions.</span></li>
         </ol>
         <div class="demos" id="demos" hidden><p class="label">demos: bundles captured ahead of time on the hardware named</p><ul></ul></div>
