@@ -1,5 +1,6 @@
 import { asciiTexture, loader, scramble, ticker } from "./chrome";
 import { buildAtlas } from "./glyphs";
+import { exitFull, initLayout, resetPanes } from "./layout";
 import { Kind, RAMP, Renderer, type RGBA, type Scene, sceneMaxTime, type Style, type Theme } from "./gl";
 import { type Finding, h, pressable, renderFindings, renderInspector, us } from "./panels";
 import { STALE } from "./stale";
@@ -301,6 +302,10 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "]" || e.key === "[") toggle(selection.pane, selection.box, "step", e.key === "]" ? 1 : -1);
   if (e.key === "Escape") select(selection.pane, -1);
 });
+// in the capture phase, so Esc leaves a full-window pane before it would clear the selection
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && exitFull()) e.stopImmediatePropagation();
+}, { capture: true });
 
 overlaySel.addEventListener("change", applyOverlay);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
@@ -425,6 +430,7 @@ async function load(files: File[]) {
     paneNames = paneCount === 3 ? ["source", "A", "B"] : paneCount === 2 ? (labels[1] ? ["source", "compiled"] : ["graph a", "graph b"]) : ["source"];
     panesEl.classList.toggle("single", paneCount === 1);
     panesEl.classList.toggle("triple", paneCount === 3);
+    resetPanes(panesEl);
     showUncompiled(paneCount === 1 ? files[0].name : null);
     const names = files.map((f) => f.name).join(" + ");
     $<HTMLElement>("#crumbs").textContent = paneCount === 3 ? `/ compare / A ${short(labels[1])} / B ${short(labels[2])}` : `/ ${names}${labels[1] ? " / " + labels[1] : ""}`;
@@ -550,7 +556,15 @@ async function start() {
     return { el, r, style: { selected: -1, linked: new Map(), overlay: "none" }, legend: el.querySelector(".legend")!, legendNames: [] };
   });
   panes.forEach((_, p) => bindPane(p));
-  new ResizeObserver(() => panes.forEach(({ r }) => r.resize())).observe(panesEl);
+  // each pane on its own: dragging a gutter or going full screen resizes one pane, not the whole set
+  const sized = new ResizeObserver(() => panes.forEach(({ r }) => r.resize()));
+  panes.forEach(({ el }) => sized.observe(el));
+  // a pane going full screen shows its whole graph at the new size; leaving keeps the view chosen there
+  initLayout($("#workspace"), panesEl, (el) => {
+    const pane = panes.find((p) => p.el === el);
+    pane?.r.resize();
+    pane?.r.fit();
+  });
 
   scramble(document);
   asciiTexture($(".landing .ascii"));

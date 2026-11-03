@@ -39,28 +39,33 @@
     <main class="workspace" id="workspace">
       <div class="panes" id="panes">
         <section class="pane" data-pane="0">
-          <div class="pane-head"><span class="num">001</span><span class="title">source</span><span class="meta"></span></div>
+          <div class="pane-head"><span class="num">001</span><span class="title">source</span><button class="full" title="Show this graph full screen (Esc leaves)">full</button><span class="meta"></span></div>
           <canvas></canvas>
           <ul class="legend"></ul>
+          <div class="gutter" title="Drag to resize, double-click to reset"></div>
         </section>
         <section class="pane" data-pane="1">
-          <div class="pane-head"><span class="num">002</span><span class="title">compiled</span><span class="meta"></span></div>
+          <div class="pane-head"><span class="num">002</span><span class="title">compiled</span><button class="full" title="Show this graph full screen (Esc leaves)">full</button><span class="meta"></span></div>
           <canvas></canvas>
           <ul class="legend"></ul>
+          <div class="gutter" title="Drag to resize, double-click to reset"></div>
         </section>
         <section class="pane" data-pane="2">
-          <div class="pane-head"><span class="num">003</span><span class="title">compiled</span><span class="meta"></span></div>
+          <div class="pane-head"><span class="num">003</span><span class="title">compiled</span><button class="full" title="Show this graph full screen (Esc leaves)">full</button><span class="meta"></span></div>
           <canvas></canvas>
           <ul class="legend"></ul>
+          <div class="gutter" title="Drag to resize, double-click to reset"></div>
         </section>
         <details class="uncompiled" id="uncompiled" hidden></details>
         <div class="loading" id="loading" hidden><span class="label">parsing</span><span class="bar"></span></div>
       </div>
       <aside class="findings" id="findings">
+        <div class="gutter" title="Drag to resize, double-click to reset"></div>
         <div class="panel-head"><span class="num">004</span><span class="title">findings</span></div>
         <div class="findings-body" id="findings-body"></div>
       </aside>
       <section class="inspector" id="inspector">
+        <div class="gutter" title="Drag to resize, double-click to reset"></div>
         <div class="panel-head"><span class="num">005</span><span class="title">inspector</span><span class="meta" id="inspector-meta"></span></div>
         <div class="inspector-body">
           <div class="inspect-main" id="inspect-main"><p class="hint">Select a node. Double-click a block or press <kbd>Enter</kbd> to open it; <kbd>[</kbd> <kbd>]</kbd> step through a stack. Arrows pan, <kbd>+</kbd> <kbd>-</kbd> zoom, <kbd>f</kbd> fits, <kbd>/</kbd> searches.</p></div>

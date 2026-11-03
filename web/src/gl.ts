@@ -337,9 +337,18 @@ export class Renderer {
     return x;
   }
 
+  /** Canvas size in CSS pixels at the last resize, 0 while hidden. */
+  private css = [0, 0];
+
   resize() {
-    const dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, Math.round(this.canvas.clientWidth * dpr)), h = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
+    const dpr = window.devicePixelRatio || 1, cw = this.canvas.clientWidth, ch = this.canvas.clientHeight;
+    // keep the point at the centre where it is, so a pane resized by hand or going full screen keeps its view
+    if (this.css[0] && this.css[1] && cw && ch) {
+      this.view.x += (this.css[0] - cw) / 2 / this.view.zoom;
+      this.view.y += (this.css[1] - ch) / 2 / this.view.zoom;
+    }
+    this.css = [cw, ch];
+    const w = Math.max(1, Math.round(cw * dpr)), h = Math.max(1, Math.round(ch * dpr));
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;

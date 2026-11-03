@@ -34,7 +34,7 @@ for (let i = 0; i < demos; i++) {
 const fixtures = new URL("../../core/tests/fixtures/", import.meta.url).pathname;
 await page.setInputFiles("#file", ["toy.onnx", "toy.exec.xml", "toy.benchmark_report.csv"].map((f) => fixtures + f));
 await page.waitForFunction(() => document.querySelector("#loading").hidden && document.querySelector("#findings-body li"), null, { timeout: 60000 });
-const head = await page.evaluate(() => document.querySelector('[data-pane="1"] .pane-head').textContent);
+const head = await page.evaluate(() => ["title", "meta"].map((c) => document.querySelector(`[data-pane="1"] .pane-head .${c}`).textContent).join(" "));
 if (!head.includes("compiled by OpenVINO") || !head.includes("imported from benchmark_app")) errors.push(`import: pane header ${head}`);
 console.log(`ok  import: ${head}`);
 refusing = "toy.exec.xml is an OpenVINO execution graph";
