@@ -137,3 +137,19 @@ fn help_lists_the_options() {
         assert!(stdout(&o).contains(opt));
     }
 }
+
+#[test]
+fn one_device_under_two_names_is_the_same_hardware() {
+    // ONNX Runtime calls a GPU "CUDA" or "TensorRT", TensorRT calls it "GPU": the device name decides
+    let on = |device: &'static str, name: &'static str| move |v: &mut Value| {
+        v["compiled"]["device"] = json!(device);
+        v["compiled"]["device_name"] = json!(name);
+    };
+    let a = edited("cuda.json", on("CUDA", "Tesla T4"));
+    let b = edited("gpu.json", |v| { latency(50.0, 49.0)(v); on("GPU", "Tesla T4")(v) });
+    let out = stdout(&diff(&[&a, &b]));
+    assert!(out.contains("latency  A") && !out.contains("different hardware"), "{out}");
+    let c = edited("other.json", |v| { latency(50.0, 49.0)(v); on("GPU", "NVIDIA GeForce RTX 4050 Laptop GPU")(v) });
+    assert!(stdout(&diff(&[&a, &c])).contains("on different hardware"));
+}
+

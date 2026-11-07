@@ -919,7 +919,11 @@ pub fn compare(panes: &[Pane], links: &[Links], sides: &[Side]) -> Vec<Value> {
         if ratio >= 1.02 && within_noise(&sides[si], &sides[fi]) {
             verdict += ", within run-to-run noise (its fastest run beats the other's median)";
         }
-        let hardware = |side: usize| sides[side].label.strip_prefix(&format!("{} {} ", sides[side].runtime, sides[side].version)).unwrap_or(&sides[side].label).to_string();
+        // the device's own name when both bundles record one: runtimes call one GPU "GPU", "CUDA" or "TensorRT"
+        let named = !sides[0].device_name.is_empty() && !sides[1].device_name.is_empty();
+        let hardware = |side: usize| if named { sides[side].device_name.clone() } else {
+            sides[side].label.strip_prefix(&format!("{} {} ", sides[side].runtime, sides[side].version)).unwrap_or(&sides[side].label).to_string()
+        };
         if hardware(0) != hardware(1) {
             verdict += " on different hardware, so the gap is hardware and compiler together";
         }
